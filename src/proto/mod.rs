@@ -38,9 +38,9 @@ impl ProtoImpl {
 		
 		return ProtoImpl{ start, incr };
 	}
-}
-
-impl Proto for ProtoImpl {
+//}
+//
+//impl Proto for ProtoImpl {
 	fn build( &self, shape : &Shape ) -> BloomFilter {
 		let mut filter : BloomFilter =  BloomFilter::new( shape );
 		self.add_to( &mut filter );
@@ -49,7 +49,7 @@ impl Proto for ProtoImpl {
 	
 	fn add_to( &self,  filter : &mut BloomFilter ) {
 		let mut accumulator = self.start;
-		for _i in 0..filter.shape.k-1 {
+		for _i in 0..filter.shape.k {
 			filter.on( accumulator % filter.shape.m );
 			accumulator = accumulator + self.incr;
 		}
@@ -131,7 +131,7 @@ impl BloomFilter {
 		if self.shape.m == filter.shape.m && self.shape.k == filter.shape.k {
 			return Err( "Shapes do not match" )
 		} 
-		for i in 0..self.buffer.len()-1 {
+		for i in 0..self.buffer.len() {
 			if self.buffer[i] & filter.buffer[i] != filter.buffer[i] {
 				return Ok(false);
 			}
@@ -157,7 +157,7 @@ impl BloomFilter {
 	
 	pub fn estimate_union( &self,  other : &BloomFilter ) -> f32 {
 		let mut count = 0;
-		for i in 0..self.buffer.len()-1 {
+		for i in 0..self.buffer.len() {
 			let x = self.buffer[i] | other.buffer[i];
 			count += x.count_ones();
 		}
@@ -168,4 +168,32 @@ impl BloomFilter {
 	pub fn estimate_intersection( &self, other : &BloomFilter ) -> f32 {
 		return self.estimate_n() + other.estimate_n() - self.estimate_union( other );
 	}
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shape_false_positives() {
+		let shape : super::Shape = super::Shape{ m : 134_191, n : 4000 , k : 23};
+		
+        assert!(shape.false_positives()-(1.0/9_994_297.0) < 0.0000001 );
+    }
+
+	#[test]
+	fn filter_protoImpl_correct() {
+		let proto : super::ProtoImpl = super::ProtoImpl::new( 1 );
+		assert_eq!( proto.start, 0 );
+		assert_eq!( proto.incr, 1 );
+	}
+
+	#[test]
+	fn filter_build_correct() {
+		let shape : super::Shape = super::Shape{ m : 60, n : 4, k : 2 };
+		let proto : super::ProtoImpl = super::ProtoImpl::new( 1 );
+		let bloomfilter : super::BloomFilter = proto.build( &shape );
+		assert_eq!( bloomfilter.buffer.len(), 2 );
+		assert_eq!( bloomfilter.buffer[0], 3 );
+		assert_eq!( bloomfilter.buffer[1], 0 );
+	}
+
 }
