@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 use std::vec::Vec;
-    
+
 pub trait Proto {
 	fn build( &self, shape : &Shape ) -> BloomFilter;
 	
@@ -8,7 +8,7 @@ pub trait Proto {
 }
 
 struct ProtoCollection {
-	inner: Vec<ProtoImpl>,
+	inner: Vec<Box<dyn Proto>>,
 }
 
 pub struct ProtoImpl {
@@ -38,9 +38,9 @@ impl ProtoImpl {
 		
 		return ProtoImpl{ start, incr };
 	}
-//}
-//
-//impl Proto for ProtoImpl {
+}
+
+impl Proto for ProtoImpl {
 	fn build( &self, shape : &Shape ) -> BloomFilter {
 		let mut filter : BloomFilter =  BloomFilter::new( shape );
 		self.add_to( &mut filter );
@@ -61,7 +61,7 @@ impl ProtoCollection {
 		return ProtoCollection{ inner : Vec::new() }
 	}
 	
-	pub fn add(&mut self,  proto : ProtoImpl ) {
+	pub fn add(&mut self, proto : Box<dyn Proto> ) {
 		self.inner.push( proto );
 	}
 	
@@ -172,6 +172,8 @@ impl BloomFilter {
 
 #[cfg(test)]
 mod tests {
+	use crate::proto::Proto;
+
     #[test]
     fn shape_false_positives() {
 		let shape : super::Shape = super::Shape{ m : 134_191, n : 4000 , k : 23};
@@ -194,6 +196,9 @@ mod tests {
 		assert_eq!( bloomfilter.buffer.len(), 2 );
 		assert_eq!( bloomfilter.buffer[0], 3 );
 		assert_eq!( bloomfilter.buffer[1], 0 );
+
+		let mut foo = super::ProtoCollection::new();
+		foo.add(Box::new(proto));
 	}
 
 }
