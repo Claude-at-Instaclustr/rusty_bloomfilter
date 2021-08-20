@@ -30,7 +30,7 @@ pub trait BloomFilter {
 	/// #Errors
 	/// Returns an error if the shapes do not match.
 	///
-	fn contains( &self, other : BloomFilterType ) -> Result<bool, &str>
+	fn contains( &self, other : &BloomFilterType ) -> Result<bool, &str>
 	{
 		if self.shape().equivalent_to( other.shape() ) {
 			return Err( "Shapes do not match" )
@@ -55,7 +55,7 @@ pub trait BloomFilter {
 	}
 
 	/// Estimates the number of items in the union of the two filters.
-	fn estimate_union( &self,  other : BloomFilterType ) -> Result<f32, &str> {
+	fn estimate_union( &self,  other : &BloomFilterType ) -> Result<f32, &str> {
 		if self.shape().equivalent_to( other.shape() ) {
 			return Err( "Shapes do not match" )
 		}
@@ -70,7 +70,7 @@ pub trait BloomFilter {
 	}
 
 	// estimate the number of items in the intersection of the two filters.
-	fn estimate_intersection( &self, other : BloomFilterType ) -> Result<f32, &str> {
+	fn estimate_intersection( &self, other : &BloomFilterType ) -> Result<f32, &str> {
 		if self.shape().equivalent_to( other.shape() ) {
 			return Err( "Shapes do not match" )
 		}
@@ -322,84 +322,91 @@ impl BloomFilter for Simple {
 #[cfg(test)]
 mod tests {
 
-
-	use crate::blooomfilter::Proto;
+	use crate::bloomfilter::BloomFilterType;
+	use crate::bloomfilter::Proto;
+	use crate::bloomfilter::SimpleProto;
+	use crate::bloomfilter::ProtoCollection;
+	use crate::bloomfilter::Simple;
+	use crate::bloomfilter::Shape;
 
     #[test]
     fn shape_false_positives() {
-		let shape : super::Shape = super::Shape{ m : 134_191, n : 4000 , k : 23};
-
-        assert!(shape.false_positives()-(1.0/9_994_297.0) < 0.0000001 );
+		let shape = Shape{ m : 134_191, k : 23};
+        assert!(shape.false_positives( 4000 )-(1.0/9_994_297.0) < 0.0000001 );
     }
 
 	#[test]
-	fn filter_protoImpl_correct() {
-		let proto : super::SimpleProto = super::SimpleProto::new( 1 );
+	fn simple_proto_correct() {
+		let proto  = SimpleProto::new( 1 );
 		assert_eq!( proto.start, 0 );
 		assert_eq!( proto.incr, 1 );
 	}
 
 	#[test]
 	fn filter_build_correct() {
-		let shape : super::Shape = super::Shape{ m : 60, n : 4, k : 2 };
-		let proto : super::SimpleProto = super::SimpleProto::new( 1 );
-		let bloomfilter : super::BloomFilter = proto.build( &shape );
-		assert_eq!( bloomfilter.buffer.len(), 2 );
-		assert_eq!( bloomfilter.buffer[0], 3 );
-		assert_eq!( bloomfilter.buffer[1], 0 );
+		let shape = Shape{ m : 60, k : 2 };
+		let proto = SimpleProto::new( 1 );
+		let bloomfilter  = proto.build( &shape );
+		assert_eq!( bloomfilter.as_vec().len(), 2 );
+		assert_eq!( bloomfilter.as_vec()[0], 3 );
+		assert_eq!( bloomfilter.as_vec()[1], 0 );
 		assert_eq!( bloomfilter.hamming_value(), 2);
 		assert!( bloomfilter.estimate_n()-1.0 < 0.05 );
 		// filter always contains itself
 		assert!( bloomfilter.contains( &bloomfilter ).unwrap());
-		let emptyFilter = super::BloomFilter{ shape : shape.clone(), buffer : vec![0 as u32 ; 2 as usize ]} ;
-		assert!( bloomfilter.contains( &emptyFilter ).unwrap());
-		assert!( ! emptyFilter.contains( &bloomfilter ).unwrap());
+		let empty_filter : BloomFilterType = Box::new(Simple{ shape : shape.clone(), buffer : vec![0 as u32 ; 2 as usize ]}) ;
+		// a filter always contains the empty filter
+		assert!( bloomfilter.contains( &empty_filter ).unwrap());
+		// an empty filter never contains a populated filter
+		assert!( ! empty_filter.contains( &bloomfilter ).unwrap());
+		// an empty filter always contains itself
+		assert!( empty_filter.contains( &empty_filter ).unwrap());
 	}
 
 	#[test]
 	fn shape_used_multiple_times() {
-		let shape : super::Shape = super::Shape{ m : 60, n : 4, k : 2 };
-		let proto : super::SimpleProto = super::SimpleProto::new( 1 );
-		let bloomfilter : super::BloomFilter = proto.build( &shape );
+		let shape = Shape{ m : 60, k : 2 };
+		let proto = SimpleProto::new( 1 );
+		let bloomfilter = proto.build( &shape );
 		let bloomfilter2 = proto.build( &shape );
-		assert_eq!( bloomfilter.buffer.len(), 2 );
-		assert_eq!( bloomfilter.buffer[0], 3 );
-		assert_eq!( bloomfilter.buffer[1], 0 );
-		assert_eq!( bloomfilter2.buffer.len(), 2 );
-		assert_eq!( bloomfilter2.buffer[0], 3 );
-		assert_eq!( bloomfilter2.buffer[1], 0 );
+		assert_eq!( bloomfilter.as_vec().len(), 2 );
+		assert_eq!( bloomfilter.as_vec()[0], 3 );
+		assert_eq!( bloomfilter.as_vec()[1], 0 );
+		assert_eq!( bloomfilter2.as_vec().len(), 2 );
+		assert_eq!( bloomfilter2.as_vec()[0], 3 );
+		assert_eq!( bloomfilter2.as_vec()[1], 0 );
 	}
 
 	#[test]
 	fn proto_collection() {
-		let shape : super::Shape = super::Shape{ m : 60, n : 4, k : 2 };
+		let shape = Shape{ m : 60, k : 2 };
 		// this proto will turn on the left 'k' most bits
-		let proto : super::SimpleProto = super::SimpleProto::new( 1 );
+		let proto = SimpleProto::new( 1 );
 		// this proto will turn on the every other bit for a total of 'k' bits
-		let proto2 = super::SimpleProto::new( 2 );
-		let mut collection = super::ProtoCollection::new();
+		let proto2 = SimpleProto::new( 2 );
+		let mut collection = ProtoCollection::new();
 		collection.add( Box::new( proto ) );
 		collection.add( Box::new( proto2 ) );
 		assert_eq!( collection.len(), 2 );
-		let bloomfilter : super::BloomFilter = collection.build( &shape );
+		let bloomfilter = collection.build( &shape );
 
-		assert_eq!( bloomfilter.buffer.len(), 2 );
-		assert_eq!( bloomfilter.buffer[0], 7 );
-		assert_eq!( bloomfilter.buffer[1], 0 );
+		assert_eq!( bloomfilter.as_vec().len(), 2 );
+		assert_eq!( bloomfilter.as_vec()[0], 7 );
+		assert_eq!( bloomfilter.as_vec()[1], 0 );
 
 		//
 		// test collection containing a collection
 		//
 
 		// this should yeild bits 0 and 16 (65536)
-		let proto3 = super::SimpleProto::new( 0x100 );
-		let mut collection2 = super::ProtoCollection::new();
+		let proto3 = SimpleProto::new( 0x100 );
+		let mut collection2 = ProtoCollection::new();
 		collection2.add( Box::new( collection ));
 		collection2.add( Box::new( proto3 ));
-		let bloomfilter2 : super::BloomFilter = collection2.build( &shape );
-		assert_eq!( bloomfilter2.buffer.len(), 2 );
-		assert_eq!( bloomfilter2.buffer[0], 7+65536 );
-		assert_eq!( bloomfilter2.buffer[1], 0 );
+		let bloomfilter2 = collection2.build( &shape );
+		assert_eq!( bloomfilter2.as_vec().len(), 2 );
+		assert_eq!( bloomfilter2.as_vec()[0], 7+65536 );
+		assert_eq!( bloomfilter2.as_vec()[1], 0 );
 
 
 	}
