@@ -8,7 +8,7 @@ pub trait Proto {
 }
 
 struct ProtoCollection {
-	inner: Vec<ProtoImpl>,
+	inner: Vec<Box<dyn Proto>>,
 }
 
 pub struct ProtoImpl {
@@ -38,9 +38,9 @@ impl ProtoImpl {
 		
 		return ProtoImpl{ start, incr };
 	}
-//}
-//
-//impl Proto for ProtoImpl {
+}
+
+impl Proto for ProtoImpl {
 	fn build( &self, shape : &Shape ) -> BloomFilter {
 		let mut filter : BloomFilter =  BloomFilter::new( shape );
 		self.add_to( &mut filter );
@@ -61,15 +61,15 @@ impl ProtoCollection {
 		return ProtoCollection{ inner : Vec::new() }
 	}
 	
-	pub fn add(&mut self,  proto : ProtoImpl ) {
+	pub fn add(&mut self, proto : Box<dyn Proto> ) {
 		self.inner.push( proto );
 	}
 	
-	pub fn add_collection(&mut self,  proto : ProtoCollection ) {
-		for i in proto.inner {
-		    self.inner.push( i );
-		}
-	}
+//	pub fn add_collection(&mut self,  proto : ProtoCollection ) {
+//		for i in proto.inner {
+//		    self.inner.push( i );
+//		}
+//	}
 	
 	pub fn len(&self) -> usize {
 		return self.inner.len();
@@ -128,7 +128,7 @@ impl BloomFilter {
 	
 	pub fn contains( &self, filter : &BloomFilter ) -> Result<bool, &str>
 	{
-		if self.shape.m == filter.shape.m && self.shape.k == filter.shape.k {
+		if self.shape.m != filter.shape.m || self.shape.k != filter.shape.k {
 			return Err( "Shapes do not match" )
 		} 
 		for i in 0..self.buffer.len() {
@@ -172,6 +172,10 @@ impl BloomFilter {
 
 #[cfg(test)]
 mod tests {
+
+	
+	use crate::proto::Proto;
+
     #[test]
     fn shape_false_positives() {
 		let shape : super::Shape = super::Shape{ m : 134_191, n : 4000 , k : 23};
@@ -194,6 +198,61 @@ mod tests {
 		assert_eq!( bloomfilter.buffer.len(), 2 );
 		assert_eq!( bloomfilter.buffer[0], 3 );
 		assert_eq!( bloomfilter.buffer[1], 0 );
+		assert_eq!( bloomfilter.hamming_value(), 2);
+		assert!( bloomfilter.estimate_n()-1.0 < 0.05 );
+		// filter always contains itself
+		assert!( bloomfilter.contains( &bloomfilter ).unwrap());
+		let emptyFilter = super::BloomFilter{ shape : shape.clone(), buffer : vec![0 as u32 ; 2 as usize ]} ;
+		assert!( bloomfilter.contains( &emptyFilter ).unwrap());
+		assert!( ! emptyFilter.contains( &bloomfilter ).unwrap());
+	}
+	
+	#[test]
+	fn shape_used_multiple_times() {
+		let shape : super::Shape = super::Shape{ m : 60, n : 4, k : 2 };
+		let proto : super::ProtoImpl = super::ProtoImpl::new( 1 );
+		let bloomfilter : super::BloomFilter = proto.build( &shape );
+		let bloomfilter2 = proto.build( &shape );
+		assert_eq!( bloomfilter.buffer.len(), 2 );
+		assert_eq!( bloomfilter.buffer[0], 3 );
+		assert_eq!( bloomfilter.buffer[1], 0 );
+		assert_eq!( bloomfilter2.buffer.len(), 2 );
+		assert_eq!( bloomfilter2.buffer[0], 3 );
+		assert_eq!( bloomfilter2.buffer[1], 0 );
+	}
+	
+	#[test]
+	fn proto_collection() {
+		let shape : super::Shape = super::Shape{ m : 60, n : 4, k : 2 };
+		// this proto will turn on the left 'k' most bits
+		let proto : super::ProtoImpl = super::ProtoImpl::new( 1 );
+		// this proto will turn on the every other bit for a total of 'k' bits 
+		let proto2 = super::ProtoImpl::new( 2 );
+		let mut collection = super::ProtoCollection::new();
+		collection.add( Box::new( proto ) );
+		collection.add( Box::new( proto2 ) );
+		assert_eq!( collection.len(), 2 );
+		let bloomfilter : super::BloomFilter = collection.build( &shape );
+		
+		assert_eq!( bloomfilter.buffer.len(), 2 );
+		assert_eq!( bloomfilter.buffer[0], 7 );
+		assert_eq!( bloomfilter.buffer[1], 0 );
+
+		//
+		// test collection containing a collection
+		//
+		
+		// this should yeild bits 0 and 16 (65536) 
+		let proto3 = super::ProtoImpl::new( 0x100 );
+		let mut collection2 = super::ProtoCollection::new();
+		collection2.add( Box::new( collection ));
+		collection2.add( Box::new( proto3 ));
+		let bloomfilter2 : super::BloomFilter = collection2.build( &shape );
+		assert_eq!( bloomfilter2.buffer.len(), 2 );
+		assert_eq!( bloomfilter2.buffer[0], 7+65536 );
+		assert_eq!( bloomfilter2.buffer[1], 0 );
+		
+		
 	}
 
 }
