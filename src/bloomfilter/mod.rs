@@ -36,7 +36,7 @@ pub trait BloomFilter {
 			return Err( "Shapes do not match" )
 		}
 		let self_buff = self.as_vec();
-		let other_buff = self.as_vec();
+		let other_buff = other.as_vec();
 		for i in 0..self_buff.len() {
 			if self_buff[i] & other_buff[i] != other_buff[i] {
 				return Ok(false);
