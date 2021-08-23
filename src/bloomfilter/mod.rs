@@ -1,7 +1,19 @@
 use std::convert::TryInto;
 use std::vec::Vec;
+use itertools::Itertools;
 
 type BloomFilterType = Box<dyn BloomFilter>;
+
+/// The interface between the internal and external representations of the contents of a Bloom filter.
+/// All bloom filters must be able to produce an iterator on bit buckets that map to a bit wise
+/// representation of the filter such that for any bit `n`:
+///  * `n / 32` yeilds the bit bucket containing the bit.
+///  * `1 << (n % 32)` produces the mask to test the bit.
+///
+type BitBucket = u32;
+/// the number of bits in a BitBucket
+const BucketSize : u32 =  (std::mem::size_of::<BitBucket>() * 8) as u32;
+type BitBucketIterator = Box<dyn Iterator::<Item=BitBucket>>;
 
 /// The traits that all BloomFilters must share
 pub trait BloomFilter {
@@ -19,8 +31,8 @@ pub trait BloomFilter {
 	///
 	fn off( &mut self, bit : u32 );
 
-	/// return the filter as a vector of u32 bit vectors.
-	fn as_vec( &self ) -> Box<&Vec::<u32>>;
+	/// return the filter as an iterator of the buffer as BitBuckets.
+	fn buffer( &self ) -> BitBucketIterator;
 
 	/// return the shape of the filter
 	fn shape( &self ) -> &Shape;
@@ -35,14 +47,15 @@ pub trait BloomFilter {
 		if self.shape().equivalent_to( other.shape() ) {
 			return Err( "Shapes do not match" )
 		}
-		let self_buff = self.as_vec();
-		let other_buff = other.as_vec();
-		for i in 0..self_buff.len() {
-			if self_buff[i] & other_buff[i] != other_buff[i] {
-				return Ok(false);
-			}
+		let iter : BitBucketIterator = self.buffer();
+		let otherIter : BitBucketIterator = other.buffer();
+		// this is counter intuitive.  We skip all the matches and find the first
+		// non matching BitBucket.  If after this there next() return None then the
+		// the filters match.
+		if self.buffer().zip( other.buffer() ).skip_while( |(a,b)| (a & b) == *b).next() == None  {
+			return Ok(true);
 		}
-		Ok(true)
+		return Ok(false);
 	}
 
 	/// Gets the hamming value (the number of bits  turnd on).
@@ -59,13 +72,8 @@ pub trait BloomFilter {
 		if self.shape().equivalent_to( other.shape() ) {
 			return Err( "Shapes do not match" )
 		}
-		let self_buff = self.as_vec();
-		let other_buff = self.as_vec();
 		let mut count = 0;
-		for i in 0..self_buff.len() {
-			let x = self_buff[i] | other_buff[i];
-			count += x.count_ones();
-		}
+		self.buffer().zip( other.buffer() ).map( |(a,b)| (a | b).count_ones() ).for_each( |x| count = count + x);
 		return Ok( self.shape().estimate_n( count ) );
 	}
 
@@ -79,6 +87,8 @@ pub trait BloomFilter {
 
 }
 
+
+type BitIterator = Box<dyn Iterator::<Item=u32>>;
 /// A prototype Bloom filer.
 ///
 /// Proto bloom filters can build filters of any shape.
@@ -90,6 +100,10 @@ pub trait Proto {
 
 	/// Add this proto to a filter.
 	fn add_to( &self,  filter : &mut BloomFilterType);
+
+	/// creates an iterator of bits to enable based on the shape.  These should be
+	/// unique values.
+	fn bits( &self, shape : &Shape ) -> BitIterator;
 }
 
 /// A Proto implementation that is a collection of Protos.
@@ -101,8 +115,8 @@ pub struct ProtoCollection {
 
 /// A Proto implementation that is a single object to be placed in the filter.
 pub struct SimpleProto {
-	start : u32,
-	incr : u32,
+	start : u64,
+	incr : u64,
 }
 
 /// The shape of the bloom filter.
@@ -117,9 +131,9 @@ pub struct Shape {
 
 /// The simple prototype
 impl SimpleProto {
-	pub fn new( full : u64 ) -> SimpleProto {
-		let start =   (full >> 32) as u32 ;
-		let incr = full  as u32;
+	pub fn new( full : u128 ) -> SimpleProto {
+		let start =   (full >> 64) as u64 ;
+		let incr = full  as u64;
 
 		return SimpleProto{ start, incr };
 	}
@@ -136,9 +150,35 @@ impl Proto for SimpleProto {
 	fn add_to( &self,  filter : &mut BloomFilterType ) {
 		let mut accumulator = self.start;
 		for _i in 0..filter.shape().k {
-			filter.on( accumulator % filter.shape().m );
+			filter.on( (accumulator % filter.shape().m as u64) as u32 );
 			accumulator = accumulator + self.incr;
 		}
+	}
+
+	fn bits( &self, shape : &Shape ) -> BitIterator {
+		struct ProtoBits {
+			incr : u64,
+			shape : Shape,
+			accumulator : u64,
+			count : u32,
+		}
+
+		impl Iterator for ProtoBits {
+			type Item = u32;
+
+			fn next(&mut self) -> Option<Self::Item> {
+				if self.count < self.shape.k {
+					let result = (self.accumulator % self.shape.m as u64) as u32;
+					self.accumulator = self.accumulator + self.incr;
+					return Some( result );
+				} else {
+					return None;
+				}
+			}
+		}
+
+		let p : ProtoBits = ProtoBits{ incr : self.incr, accumulator : self.start, shape : shape.clone(), count:0  };
+		return Box::new( p.unique());
 	}
 }
 
@@ -154,7 +194,7 @@ impl ProtoCollection {
 	}
 
 	/// Gets the number of Protos in the collection
-	pub fn len(&self) -> usize {
+	pub fn count(&self) -> usize {
 		return self.inner.len();
 	}
 }
@@ -171,6 +211,13 @@ impl Proto for ProtoCollection {
 		for v in &self.inner {
 			v.add_to(  filter )
 		}
+	}
+
+	fn bits( &self, shape : &Shape) -> BitIterator {
+		let mut p_iter = &self.inner.iter();
+		let mut y : BitIterator = p_iter.next().unwrap().bits( &shape );
+		p_iter.for_each( |x| y = Box::new(y.chain(x.bits( &shape ))));
+		return Box::new(y.unique());
 	}
 }
 
@@ -205,7 +252,7 @@ impl Shape {
 /// A bloom filter that stores the bits in an array of u32 bit buffers
 pub struct Simple {
 	shape : Shape,
-  	buffer : Vec::<u32>,
+  	buffer : Vec::<BitBucket>,
 }
 
 impl Simple {
@@ -216,16 +263,20 @@ impl Simple {
 
 	/// Construct an empty Simple Bloom filter
 	pub fn new( shape : &Shape ) -> Simple {
-		let size = if shape.m % 32 > 0  {1+(shape.m / 32)} else {shape.m / 32};
-		let buff = vec![0 as u32 ; size as usize ];
+		let size = if shape.m % BucketSize > 0  {1+(shape.m / BucketSize)} else {shape.m / BucketSize};
+		let buff = vec![0 as BitBucket ; size as usize ];
 		Simple{ shape: shape.clone(), buffer : buff }
 	}
 
 }
 
 impl BloomFilter for Simple {
- 	fn as_vec(&self) -> Box<&Vec::<u32>> {
-		return Box::new( &self.buffer );
+ 	// fn as_vec(&self) -> Box<&Vec::<u32>> {
+	// 	return Box::new( &self.buffer );
+	// }
+
+	fn buffer( &self ) -> BitBucketIterator {
+		return Box::new(self.buffer.iter());
 	}
 
 	fn shape(&self) -> &Shape {
@@ -236,8 +287,8 @@ impl BloomFilter for Simple {
 		if bit >= self.shape.m {
 			panic!( "Bit position too large")
 		}
-		let offset = bit % 32;
-		let position : usize = (bit / 32).try_into().unwrap();
+		let offset = bit % BucketSize;
+		let position : usize = (bit / BucketSize).try_into().unwrap();
 		self.buffer[position] |= 1<<offset;
 	}
 
@@ -245,8 +296,8 @@ impl BloomFilter for Simple {
 		if bit >= self.shape.m {
 			panic!( "Bit position too large")
 		}
-		let offset = bit % 32;
-		let position : usize = (bit / 32).try_into().unwrap() ;
+		let offset : BitBucket = bit % BucketSize;
+		let position : usize = (bit / BucketSize).try_into().unwrap() ;
 		self.buffer[position] &= !(1<<offset);
 	}
 
@@ -328,6 +379,7 @@ mod tests {
 	use crate::bloomfilter::ProtoCollection;
 	use crate::bloomfilter::Simple;
 	use crate::bloomfilter::Shape;
+	use crate::bloomfilter::BitBucketIterator;
 
     #[test]
     fn shape_false_positives() {
@@ -347,9 +399,10 @@ mod tests {
 		let shape = Shape{ m : 60, k : 2 };
 		let proto = SimpleProto::new( 1 );
 		let bloomfilter  = proto.build( &shape );
-		assert_eq!( bloomfilter.as_vec().len(), 2 );
-		assert_eq!( bloomfilter.as_vec()[0], 3 );
-		assert_eq!( bloomfilter.as_vec()[1], 0 );
+		assert_eq!( bloomfilter.buffer().count(), 2 );
+		let iter : BitBucketIterator = bloomfilter.buffer();
+		assert_eq!( iter.next().unwrap(), 3 );
+		assert_eq!( iter.next().unwrap(), 0 );
 		assert_eq!( bloomfilter.hamming_value(), 2);
 		assert!( bloomfilter.estimate_n()-1.0 < 0.05 );
 		// filter always contains itself
@@ -369,12 +422,14 @@ mod tests {
 		let proto = SimpleProto::new( 1 );
 		let bloomfilter = proto.build( &shape );
 		let bloomfilter2 = proto.build( &shape );
-		assert_eq!( bloomfilter.as_vec().len(), 2 );
-		assert_eq!( bloomfilter.as_vec()[0], 3 );
-		assert_eq!( bloomfilter.as_vec()[1], 0 );
-		assert_eq!( bloomfilter2.as_vec().len(), 2 );
-		assert_eq!( bloomfilter2.as_vec()[0], 3 );
-		assert_eq!( bloomfilter2.as_vec()[1], 0 );
+		assert_eq!( bloomfilter.buffer().count(), 2 );
+		let mut iter : BitBucketIterator = bloomfilter.buffer();
+		assert_eq!( iter.next().unwrap(), 3 );
+		assert_eq!( iter.next().unwrap(), 0 );
+		assert_eq!( bloomfilter2.buffer().count(), 2 );
+		let mut iter2 : BitBucketIterator = bloomfilter2.buffer();
+		assert_eq!( iter.next().unwrap(), 3 );
+		assert_eq!( iter.next().unwrap(), 0 );
 	}
 
 	#[test]
@@ -387,12 +442,13 @@ mod tests {
 		let mut collection = ProtoCollection::new();
 		collection.add( Box::new( proto ) );
 		collection.add( Box::new( proto2 ) );
-		assert_eq!( collection.len(), 2 );
+		assert_eq!( collection.count(), 2 );
 		let bloomfilter = collection.build( &shape );
 
-		assert_eq!( bloomfilter.as_vec().len(), 2 );
-		assert_eq!( bloomfilter.as_vec()[0], 7 );
-		assert_eq!( bloomfilter.as_vec()[1], 0 );
+		assert_eq!( bloomfilter.buffer().count(), 2 );
+		let mut iter : BitBucketIterator = bloomfilter.buffer();
+		assert_eq!( iter.next().unwrap(), 7 );
+		assert_eq!( iter.next().unwrap(), 0 );
 
 		//
 		// test collection containing a collection
@@ -404,9 +460,10 @@ mod tests {
 		collection2.add( Box::new( collection ));
 		collection2.add( Box::new( proto3 ));
 		let bloomfilter2 = collection2.build( &shape );
-		assert_eq!( bloomfilter2.as_vec().len(), 2 );
-		assert_eq!( bloomfilter2.as_vec()[0], 7+65536 );
-		assert_eq!( bloomfilter2.as_vec()[1], 0 );
+		assert_eq!( bloomfilter2.buffer().count(), 2 );
+		let mut iter2 : BitBucketIterator = bloomfilter2.buffer();
+		assert_eq!( iter2.next().unwrap(), 7+65536 );
+		assert_eq!( iter2.next().unwrap(), 0 );
 
 
 	}
