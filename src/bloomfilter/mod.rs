@@ -17,6 +17,28 @@ type BloomFilterType = Box<dyn BloomFilter>;
 /// The traits that all BloomFilters must share
 pub trait BloomFilter {
 
+    fn aggregate( a : BloomFilterType, b : BloomFilterType) -> Result< BloomFilterType, &'static str > where Self: Sized {
+        if a.shape().equivalent_to(b.shape()) {
+            print!( "Shapes do not match {:#?} {:#?}", a.shape(), b.shape());
+            return Err("Shapes do not match");
+        }
+        if (a.hamming_value() + b.hamming_value()) < a.shape().number_of_buckets()
+        {
+            // create a sparse one
+            let mut x = Vec::with_capacity(a.hamming_value()+b.hamming_value() );
+            x.extend( a.indicies().iter() );
+            x.extend( b.indicies().iter() );
+            x.sort_unstable();
+            x.dedup();
+            Ok( Box::new( Sparse{ shape : a.shape().clone(), buffer : Rc::new( x )}))
+        }
+        else {
+
+            // create a simple one
+            Ok( Box::new(Simple{ shape : a.shape().clone(), buffer : Rc::new( a.vector().union( &b.vector() ) ) } ))
+        }
+    }
+
     /// Returns true if it is more efficient to access the bits by index rather than by BitVector.
     /// This is generally the case if hamming_value < shape.m % 8
     fn is_sparse(&self) -> bool {
@@ -34,6 +56,14 @@ pub trait BloomFilter {
     /// Gets the hamming value (the number of bits  turnd on).
     fn hamming_value(&self) -> usize;
 
+
+    // Updates this filter by merging the values from the other filter
+    fn merge(&mut self, other : BloomFilterType) -> Result<bool, &str>;
+
+
+    // fn join(&self, other : &BloomfilterType) -> BloomFilterType {
+    //
+    // }
     /// Determines if this filter contains the other filter.
     ///
     /// #Errors
@@ -199,6 +229,23 @@ impl BloomFilter for Simple {
         Rc::new(x.into_iter().collect())
     }
 
+    fn merge(&mut self, other : BloomFilterType) -> Result<bool, &str> {
+        if self.shape().equivalent_to(other.shape()) {
+            print!( "Shapes do not match {:#?} {:#?}", self.shape(), other.shape());
+            return Err("Shapes do not match" );
+        }
+        let mut b = BitVector::new( self.shape.number_of_buckets() );
+        b.insert_all( &self.buffer );
+        if other.is_sparse() {
+            other.indicies().iter().for_each( |s| {b.insert( *s );});
+        } else {
+            b.insert_all( &other.vector() );
+        }
+        self.buffer = Rc::new( b );
+        Ok(true)
+    }
+
+
     fn shape(&self) -> &Shape {
         return &self.shape;
     }
@@ -249,6 +296,25 @@ impl BloomFilter for Sparse {
     /// return a list of the bits that are turned on.
     fn indicies(&self) -> Rc<Vec::<usize>> {
         self.buffer.clone()
+    }
+
+    fn merge(&mut self, other : BloomFilterType) -> Result<bool, &str> {
+        if self.shape().equivalent_to(other.shape()) {
+            print!( "Shapes do not match {:#?} {:#?}", self.shape(), other.shape());
+            return Err("Shapes do not match");
+        }
+        let mut v : Vec::<usize> = Vec::new();
+        self.buffer.iter().for_each( |s| v.push( *s ));
+        if other.is_sparse() {
+            other.indicies().iter().for_each( |s| v.push( *s ));
+        } else {
+            let x : & BitVector = &other.vector();
+            x.into_iter().for_each( |s| v.push( s )  );
+        }
+        v.sort_unstable();
+        v.dedup();
+        self.buffer = Rc::new( v );
+        Ok( true )
     }
 
     fn shape(&self) -> &Shape {
