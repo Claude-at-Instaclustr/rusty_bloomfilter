@@ -1,9 +1,9 @@
 pub mod proto;
 
-use bitvector::*;
-use std::vec::Vec;
-use std::rc::Rc;
 use crate::bloomfilter::proto::Proto;
+use bitvector::*;
+use std::rc::Rc;
+use std::vec::Vec;
 
 type BloomFilterType = Box<dyn BloomFilter>;
 
@@ -16,26 +16,35 @@ type BloomFilterType = Box<dyn BloomFilter>;
 
 /// The traits that all BloomFilters must share
 pub trait BloomFilter {
-
-    fn aggregate( a : BloomFilterType, b : BloomFilterType) -> Result< BloomFilterType, &'static str > where Self: Sized {
-        if a.shape().equivalent_to(b.shape()) {
-            print!( "Shapes do not match {:#?} {:#?}", a.shape(), b.shape());
+    /// Aggregates two Bloom filtrs.  If the merge will probably produce a sparse filter the sparse
+    /// implementation is used.  Otherwise the Simple implementaiton is used.
+    /// If the bloom filter arguments are not of Simple or Sparse they will be treated as though
+    /// they were.  (e.g. no special handling for other types)
+    fn merge(&self, other: &BloomFilterType) -> Result<BloomFilterType, &str>
+    {
+        if self.shape().equivalent_to(other.shape()) {
+            print!("Shapes do not match {:#?} {:#?}", self.shape(), other.shape());
             return Err("Shapes do not match");
         }
-        if (a.hamming_value() + b.hamming_value()) < a.shape().number_of_buckets()
-        {
+        if (self.hamming_value() + other.hamming_value()) < self.shape().number_of_buckets() {
             // create a sparse one
-            let mut x = Vec::with_capacity(a.hamming_value()+b.hamming_value() );
-            x.extend( a.indicies().iter() );
-            x.extend( b.indicies().iter() );
+            print!("Creating sparse BloomFilter\n");
+            let mut x = Vec::with_capacity(self.hamming_value() + other.hamming_value());
+            x.extend(self.indicies().iter());
+            x.extend(other.indicies().iter());
             x.sort_unstable();
             x.dedup();
-            Ok( Box::new( Sparse{ shape : a.shape().clone(), buffer : Rc::new( x )}))
-        }
-        else {
-
+            Ok(Box::new(Sparse {
+                shape: self.shape().clone(),
+                buffer: Rc::new(x),
+            }))
+        } else {
             // create a simple one
-            Ok( Box::new(Simple{ shape : a.shape().clone(), buffer : Rc::new( a.vector().union( &b.vector() ) ) } ))
+            print!("Creating simple BloomFilter\n");
+            Ok(Box::new(Simple {
+                shape: self.shape().clone(),
+                buffer: Rc::new(self.vector().union(&other.vector())),
+            }))
         }
     }
 
@@ -45,25 +54,22 @@ pub trait BloomFilter {
         self.hamming_value() < self.shape().number_of_buckets()
     }
 
-    fn vector(&self) -> Rc::<BitVector>;
+    /// Returns a the BitVector that represents this bloom filter.
+    fn vector(&self) -> Rc<BitVector>;
 
-    /// return a list of the bits that are turned on.
-    fn indicies(&self) -> Rc::<Vec::<usize>>;
+    /// Returns a Vector of the bits that are turned on.
+    /// these are required to be in sorted into ascending order and duplicates are not allowed.
+    fn indicies(&self) -> Rc<Vec<usize>>;
 
-    /// return the shape of the filter
+    /// Returns the shape of the filter
     fn shape(&self) -> &Shape;
 
     /// Gets the hamming value (the number of bits  turnd on).
     fn hamming_value(&self) -> usize;
 
-
     // Updates this filter by merging the values from the other filter
-    fn merge(&mut self, other : BloomFilterType) -> Result<bool, &str>;
+    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<bool, &str>;
 
-
-    // fn join(&self, other : &BloomfilterType) -> BloomFilterType {
-    //
-    // }
     /// Determines if this filter contains the other filter.
     ///
     /// #Errors
@@ -71,50 +77,46 @@ pub trait BloomFilter {
     ///
     fn contains(&self, other: &BloomFilterType) -> Result<bool, &str> {
         if self.shape().equivalent_to(other.shape()) {
-            print!( "Shapes do not match {:#?} {:#?}", self.shape(), other.shape());
+            print!(
+                "Shapes do not match {:#?} {:#?}",
+                self.shape(),
+                other.shape()
+            );
             return Err("Shapes do not match");
         }
         // this is counter intuitive.  We skip all the matches and find the first
         // non matching BitBucket.  If after this there next() return None then the
         // the filters match.
         if self.is_sparse() {
-                print!( "self is sparse, ");
-                if other.is_sparse()
-                {
-                    print!( " other is sparse\n");
-                    if other.indicies().len() > self.indicies().len()
-                    {
-                        return Ok(false);
-                    }
-                    return Ok(other.indicies().iter().all( |s| self.indicies().binary_search( &s ).is_ok()));
+            print!("self is sparse, ");
+            if other.is_sparse() {
+                print!(" other is sparse\n");
+                if other.indicies().len() > self.indicies().len() {
+                    return Ok(false);
                 }
-                else {
-                    print!( "other is not sparse\n");
-                    let x : & BitVector = &other.vector();
-                    return Ok(x.into_iter().all( |s| self.indicies().binary_search( &s ).is_ok()));
-                }
+                return Ok(other
+                    .indicies()
+                    .iter()
+                    .all(|s| self.indicies().binary_search(&s).is_ok()));
             } else {
-                print!( "self is not sparse, ");
-                if other.is_sparse()
-                {
-                    print!( "other is sparse\n");
-                    return Ok( other.indicies().iter().all( |s| self.vector().contains( *s ) ));
-                } else {
-                    print!( "other is not sparse\n");
-                    let v1 = self.vector();
-                    print!( "v1 = {} {:#?}\n", v1.len(), &v1 );
-                    let v2 = other.vector();
-                    print!( "v2 = {} {:#?}\n", v2.len(), &v2 );
-                    if v1.len() < v2.len()
-                    {
-                        return Ok( false );
-                    }
-                    return Ok( v1.iter()
-                    .zip( v2.iter())
-                    .all( |(s1,s2)| (s1 & s2) == s2 ));
-                }
-
+                print!("other is not sparse\n");
+                let x: &BitVector = &other.vector();
+                return Ok(x
+                    .into_iter()
+                    .all(|s| self.indicies().binary_search(&s).is_ok()));
             }
+        } else {
+            print!("self is not sparse, ");
+            if other.is_sparse() {
+                print!("other is sparse\n");
+                return Ok(other.indicies().iter().all(|s| self.vector().contains(*s)));
+            } else {
+                print!("other is not sparse\n");
+                let v1 :&BitVector = &self.vector();
+                let v2 :&BitVector = &other.vector();
+                return Ok( (v1 & v2 ).len() == v2.len());
+            }
+        }
     }
 
     //
@@ -131,7 +133,9 @@ pub trait BloomFilter {
         if self.shape().equivalent_to(other.shape()) {
             return Err("Shapes do not match");
         }
-        return Ok( self.shape().estimate_n(self.vector().union( &other.vector() ).len()));
+        return Ok(self
+            .shape()
+            .estimate_n(self.vector().union(&other.vector()).len()));
     }
 
     // Estimates the number of items in the intersection of the two filters.
@@ -190,61 +194,67 @@ impl Shape {
 #[derive(Debug)]
 pub struct Simple {
     shape: Shape,
-    buffer: Rc::<BitVector>,
+    buffer: Rc<BitVector>,
 }
 
 impl Simple {
-
-    pub fn empty_instance(shape : &Shape) -> BloomFilterType {
+    pub fn empty_instance(shape: &Shape) -> BloomFilterType {
         Box::new(Simple {
             shape: shape.clone(),
-            buffer: Rc::new(BitVector::new( shape.number_of_buckets() )),
+            buffer: Rc::new(BitVector::new(shape.number_of_buckets())),
         })
     }
 
-    pub fn instance(shape: &Shape, proto: & dyn Proto ) -> BloomFilterType {
-        let mut v = BitVector::new( shape.number_of_buckets() );
-        proto.bits(&shape).iter().for_each( |s| {v.insert( *s );} );
+    pub fn instance(shape: &Shape, proto: &dyn Proto) -> BloomFilterType {
+        let mut v = BitVector::new(shape.number_of_buckets());
+        proto.bits(&shape).iter().for_each(|s| {
+            v.insert(*s);
+        });
         let simple = Simple {
             shape: shape.clone(),
             buffer: Rc::new(v),
         };
         return Box::new(simple);
     }
-
 }
 
 impl BloomFilter for Simple {
-
-    fn is_sparse(&self) -> bool { false }
+    fn is_sparse(&self) -> bool {
+        false
+    }
 
     /// return the filter as a BitVector.
-    fn vector(&self) -> Rc::<BitVector> {
+    fn vector(&self) -> Rc<BitVector> {
         self.buffer.clone()
     }
 
     /// return a list of the bits that are turned on.
-    fn indicies(&self) -> Rc::<Vec::<usize>> {
-        let x : & BitVector = &self.buffer;
+    fn indicies(&self) -> Rc<Vec<usize>> {
+        let x: &BitVector = &self.buffer;
         Rc::new(x.into_iter().collect())
     }
 
-    fn merge(&mut self, other : BloomFilterType) -> Result<bool, &str> {
+    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<bool, &str> {
         if self.shape().equivalent_to(other.shape()) {
-            print!( "Shapes do not match {:#?} {:#?}", self.shape(), other.shape());
-            return Err("Shapes do not match" );
+            print!(
+                "Shapes do not match {:#?} {:#?}",
+                self.shape(),
+                other.shape()
+            );
+            return Err("Shapes do not match");
         }
-        let mut b = BitVector::new( self.shape.number_of_buckets() );
-        b.insert_all( &self.buffer );
+        let mut b = BitVector::new(self.shape.number_of_buckets());
+        b.insert_all(&self.buffer);
         if other.is_sparse() {
-            other.indicies().iter().for_each( |s| {b.insert( *s );});
+            other.indicies().iter().for_each(|s| {
+                b.insert(*s);
+            });
         } else {
-            b.insert_all( &other.vector() );
+            b.insert_all(&other.vector());
         }
-        self.buffer = Rc::new( b );
+        self.buffer = Rc::new(b);
         Ok(true)
     }
-
 
     fn shape(&self) -> &Shape {
         return &self.shape;
@@ -259,62 +269,67 @@ impl BloomFilter for Simple {
 #[derive(Debug)]
 pub struct Sparse {
     shape: Shape,
-    buffer: Rc::<Vec::<usize>>,
+    buffer: Rc<Vec<usize>>,
 }
 
 impl Sparse {
-
-    pub fn empty_instance(shape : &Shape) -> BloomFilterType {
+    pub fn empty_instance(shape: &Shape) -> BloomFilterType {
         Box::new(Sparse {
             shape: shape.clone(),
             buffer: Rc::new(Vec::new()),
         })
     }
 
-    pub fn instance(shape: &Shape, proto: & dyn Proto ) -> BloomFilterType {
-        let v = proto.bits(&shape).iter().map( |x| *x ).collect();
+    pub fn instance(shape: &Shape, proto: &dyn Proto) -> BloomFilterType {
+        let v = proto.bits(&shape).iter().map(|x| *x).collect();
         let sparse = Sparse {
             shape: shape.clone(),
             buffer: Rc::new(v),
         };
         return Box::new(sparse);
     }
-
 }
 
 impl BloomFilter for Sparse {
-
-    fn is_sparse(&self) -> bool { true }
+    fn is_sparse(&self) -> bool {
+        true
+    }
 
     /// return the filter as a BitVector.
-    fn vector(&self) -> Rc::<BitVector> {
-        let mut v = BitVector::new( self.shape.number_of_buckets() );
-        self.buffer.iter().for_each( |s| {v.insert( *s );} );
-        Rc::new( v )
+    fn vector(&self) -> Rc<BitVector> {
+        let mut v = BitVector::new(self.shape.number_of_buckets());
+        self.buffer.iter().for_each(|s| {
+            v.insert(*s);
+        });
+        Rc::new(v)
     }
 
     /// return a list of the bits that are turned on.
-    fn indicies(&self) -> Rc<Vec::<usize>> {
+    fn indicies(&self) -> Rc<Vec<usize>> {
         self.buffer.clone()
     }
 
-    fn merge(&mut self, other : BloomFilterType) -> Result<bool, &str> {
+    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<bool, &str> {
         if self.shape().equivalent_to(other.shape()) {
-            print!( "Shapes do not match {:#?} {:#?}", self.shape(), other.shape());
+            print!(
+                "Shapes do not match {:#?} {:#?}",
+                self.shape(),
+                other.shape()
+            );
             return Err("Shapes do not match");
         }
-        let mut v : Vec::<usize> = Vec::new();
-        self.buffer.iter().for_each( |s| v.push( *s ));
+        let mut v: Vec<usize> = Vec::new();
+        self.buffer.iter().for_each(|s| v.push(*s));
         if other.is_sparse() {
-            other.indicies().iter().for_each( |s| v.push( *s ));
+            other.indicies().iter().for_each(|s| v.push(*s));
         } else {
-            let x : & BitVector = &other.vector();
-            x.into_iter().for_each( |s| v.push( s )  );
+            let x: &BitVector = &other.vector();
+            x.into_iter().for_each(|s| v.push(s));
         }
         v.sort_unstable();
         v.dedup();
-        self.buffer = Rc::new( v );
-        Ok( true )
+        self.buffer = Rc::new(v);
+        Ok(true)
     }
 
     fn shape(&self) -> &Shape {
@@ -329,8 +344,8 @@ impl BloomFilter for Sparse {
 #[cfg(test)]
 mod tests {
 
-    use crate::bloomfilter::*;
     use crate::bloomfilter::proto::*;
+    use crate::bloomfilter::*;
 
     #[test]
     fn shape_false_positives() {
@@ -341,19 +356,19 @@ mod tests {
     #[test]
     fn shape_number_of_buckets() {
         let shape = Shape { m: 60, k: 2 };
-        assert_eq!(shape.number_of_buckets(), 1 );
+        assert_eq!(shape.number_of_buckets(), 1);
         let shape = Shape { m: 120, k: 2 };
-        assert_eq!(shape.number_of_buckets(), 2 );
+        assert_eq!(shape.number_of_buckets(), 2);
     }
 
     #[test]
     fn empty_filter() {
         let shape = Shape { m: 60, k: 2 };
-        let bloomfilter = Simple::empty_instance( &shape );
-        assert_eq!( *bloomfilter.indicies(), [] );
+        let bloomfilter = Simple::empty_instance(&shape);
+        assert_eq!(*bloomfilter.indicies(), []);
         let v = bloomfilter.vector();
-        assert_eq!( v.len(), 0 );
-        assert_eq!( bloomfilter.hamming_value(), 0 );
+        assert_eq!(v.len(), 0);
+        assert_eq!(bloomfilter.hamming_value(), 0);
         assert!(bloomfilter.estimate_n() < 0.05);
         // filter always contains itself
         assert!(bloomfilter.contains(&bloomfilter).unwrap());
@@ -363,24 +378,24 @@ mod tests {
     fn filter_build_correct() {
         let shape = Shape { m: 60, k: 2 };
         let proto = SimpleProto::new(1);
-        let bloomfilter = Simple::instance( &shape, &proto );
-        assert_eq!( *bloomfilter.indicies(), [0,1] );
+        let bloomfilter = Simple::instance(&shape, &proto);
+        assert_eq!(*bloomfilter.indicies(), [0, 1]);
         let v = bloomfilter.vector();
-        assert_eq!( v.len(), 2 );
-        assert!( v.contains( 0 ) );
-        assert!( v.contains( 1 ) );
-        assert_eq!( bloomfilter.hamming_value(), 2 );
+        assert_eq!(v.len(), 2);
+        assert!(v.contains(0));
+        assert!(v.contains(1));
+        assert_eq!(bloomfilter.hamming_value(), 2);
         assert!(bloomfilter.estimate_n() - 1.0 < 0.05);
         // filter always contains itself
         assert!(bloomfilter.contains(&bloomfilter).unwrap());
         let empty_filter: BloomFilterType = Box::new(Simple {
             shape: shape.clone(),
-            buffer: Rc::new(BitVector::new( shape.number_of_buckets() )),
+            buffer: Rc::new(BitVector::new(shape.number_of_buckets())),
         });
         // a filter always contains the empty filter
         assert!(bloomfilter.contains(&empty_filter).unwrap());
         // an empty filter never contains a populated filter
-        print!( "{:#?}", empty_filter.contains(&bloomfilter) );
+        print!("{:#?}", empty_filter.contains(&bloomfilter));
         assert!(!empty_filter.contains(&bloomfilter).unwrap());
         // an empty filter always contains itself
         assert!(empty_filter.contains(&empty_filter).unwrap());
@@ -390,11 +405,11 @@ mod tests {
     fn shape_used_multiple_times() {
         let shape = Shape { m: 60, k: 2 };
         let proto = SimpleProto::new(1);
-        let bloomfilter = Simple::instance( &shape, &proto );
-        let bloomfilter2 = Simple::instance( &shape, &proto );
-        assert_eq!( *bloomfilter.indicies(), [0,1] );
-        assert_eq!( *bloomfilter2.indicies(), [0,1] );
-        assert!( bloomfilter.contains( &bloomfilter2 ).unwrap() );
+        let bloomfilter = Simple::instance(&shape, &proto);
+        let bloomfilter2 = Simple::instance(&shape, &proto);
+        assert_eq!(*bloomfilter.indicies(), [0, 1]);
+        assert_eq!(*bloomfilter2.indicies(), [0, 1]);
+        assert!(bloomfilter.contains(&bloomfilter2).unwrap());
     }
 
     #[test]
@@ -408,8 +423,8 @@ mod tests {
         collection.add(Box::new(proto));
         collection.add(Box::new(proto2));
         assert_eq!(collection.count(), 2);
-        let bloomfilter = Simple::instance( &shape, &collection );
-        assert_eq!( *bloomfilter.indicies(), [0,1,2]);
+        let bloomfilter = Simple::instance(&shape, &collection);
+        assert_eq!(*bloomfilter.indicies(), [0, 1, 2]);
 
         //
         // test collection containing a collection
@@ -420,7 +435,36 @@ mod tests {
         let mut collection2 = ProtoCollection::new();
         collection2.add(Box::new(collection));
         collection2.add(Box::new(proto3));
-        let bloomfilter2 = Simple::instance( &shape, &collection2 );
-        assert_eq!( *bloomfilter2.indicies(), [0,1,2,16]);
+        let bloomfilter2 = Simple::instance(&shape, &collection2);
+        assert_eq!(*bloomfilter2.indicies(), [0, 1, 2, 16]);
     }
+
+    #[test]
+    fn filter_merge_inplace_test() {
+        let shape = Shape { m: 60, k: 2 };
+        let proto = SimpleProto::new(1);
+        let mut bloomfilter = Simple::instance(&shape, &proto);
+        let proto2 = SimpleProto::new( 0x100 );
+        let bloomfilter2 = Simple::instance(&shape, &proto2);
+
+        assert!( bloomfilter.merge_inplace( &bloomfilter2 ).unwrap() );
+        assert_eq!(*bloomfilter.indicies(), [0, 1, 16]);
+
+        assert!( bloomfilter.contains( &bloomfilter2 ).unwrap() );
+    }
+
+    #[test]
+    fn filter_merge_test() {
+        let shape = Shape { m: 60, k: 2 };
+        let proto = SimpleProto::new(1);
+        let bloomfilter = Simple::instance(&shape, &proto);
+        let proto2 = SimpleProto::new( 0x100 );
+        let bloomfilter2 = Simple::instance(&shape, &proto2);
+
+        let bloomfilter3 = bloomfilter.merge(&bloomfilter2 ).unwrap();
+        assert_eq!(*bloomfilter3.indicies(), [0, 1, 16]);
+        assert!( bloomfilter3.contains( &bloomfilter ).unwrap());
+        assert!( bloomfilter3.contains( &bloomfilter2 ).unwrap());
+    }
+
 }
