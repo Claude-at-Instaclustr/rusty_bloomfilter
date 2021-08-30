@@ -8,6 +8,7 @@ pub trait Proto {
     /// creates an iterator of bits to enable based on the shape.  These should be
     /// unique values.
     fn bits(&self, shape: &Shape) -> Vec<usize>;
+    fn size(&self) -> usize;
 }
 
 /// A Proto implementation that is a collection of Protos.  That acts as a single proto
@@ -44,6 +45,10 @@ impl Proto for SimpleProto {
         }
         return v;
     }
+
+    fn size(&self) -> usize {
+        1
+    }
 }
 
 impl ProtoCollection {
@@ -68,6 +73,10 @@ impl Proto for ProtoCollection {
         //let v : Vec::<usize> = Vec::with_capacity( self.k * self.inner.len() );
 
         return self.inner.iter().flat_map(|s| s.bits(shape)).collect();
+    }
+
+    fn size(&self) -> usize {
+        self.inner.iter().map(|x| x.size()).sum()
     }
 }
 

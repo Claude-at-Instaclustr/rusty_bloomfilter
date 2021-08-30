@@ -51,6 +51,37 @@ pub trait BloomFilter {
         }
     }
 
+    // Updates this filter by merging the values from the other filter
+    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<bool, &str>;
+
+    /// Aggregates a proto Bloom filtrs into a bloom filter.  If the merge will probably produce a sparse filter the sparse
+    /// implementation is used.  Otherwise the Simple implementaiton is used.
+    /// If the bloom filter arguments are not of Simple or Sparse they will be treated as though
+    /// they were.  (e.g. no special handling for other types)
+    fn merge_proto(&self, proto: &dyn Proto) -> Result<BloomFilterType, &str> {
+        let other;
+        if proto.size() * self.shape().k < self.shape().m {
+            other = Sparse::instance(&self.shape(), proto);
+        } else {
+            other = Simple::instance(&self.shape(), proto);
+        }
+        return self.merge(&other);
+    }
+
+    /// Aggregates a proto Bloom filtrs into a bloom filter.  If the merge will probably produce a sparse filter the sparse
+    /// implementation is used.  Otherwise the Simple implementaiton is used.
+    /// If the bloom filter arguments are not of Simple or Sparse they will be treated as though
+    /// they were.  (e.g. no special handling for other types)
+    fn merge_proto_inplace(&mut self, proto: &dyn Proto) -> Result<bool, &str> {
+        let other;
+        if proto.size() * self.shape().k < self.shape().m {
+            other = Sparse::instance(&self.shape(), proto);
+        } else {
+            other = Simple::instance(&self.shape(), proto);
+        }
+        return self.merge_inplace(&other);
+    }
+
     /// Returns true if it is more efficient to access the bits by index rather than by BitVector.
     /// This is generally the case if hamming_value < shape.m % 8
     fn is_sparse(&self) -> bool {
@@ -70,8 +101,16 @@ pub trait BloomFilter {
     /// Gets the hamming value (the number of bits  turnd on).
     fn hamming_value(&self) -> usize;
 
-    // Updates this filter by merging the values from the other filter
-    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<bool, &str>;
+    /// Determines if this filter contains the proto
+    fn contains_proto(&self, proto: &dyn Proto) -> Result<bool, &str> {
+        let other;
+        if proto.size() * self.shape().k < self.shape().m {
+            other = Sparse::instance(&self.shape(), proto);
+        } else {
+            other = Simple::instance(&self.shape(), proto);
+        }
+        return self.contains(&other);
+    }
 
     /// Determines if this filter contains the other filter.
     ///
@@ -693,5 +732,29 @@ mod tests {
         assert_eq!(*bloomfilter3.indicies(), [0, 1, 16]);
         assert!(bloomfilter3.contains(&bloomfilter).unwrap());
         assert!(bloomfilter3.contains(&bloomfilter2).unwrap());
+    }
+
+    #[test]
+    fn filter_merge_test_simple_by_proto() {
+        let shape = Shape { m: 60, k: 2 };
+        let proto = SimpleProto::new(1);
+        let bloomfilter = Simple::instance(&shape, &proto);
+        let proto2 = SimpleProto::new(0x100);
+
+        let bloomfilter3 = bloomfilter.merge_proto(&proto2).unwrap();
+        assert_eq!(*bloomfilter3.indicies(), [0, 1, 16]);
+        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
+    }
+
+    #[test]
+    fn filter_merge_test_sparse_by_proto() {
+        let shape = Shape { m: 60, k: 2 };
+        let proto = SimpleProto::new(1);
+        let bloomfilter = Sparse::instance(&shape, &proto);
+        let proto2 = SimpleProto::new(0x100);
+
+        let bloomfilter3 = bloomfilter.merge_proto(&proto2).unwrap();
+        assert_eq!(*bloomfilter3.indicies(), [0, 1, 16]);
+        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
     }
 }
