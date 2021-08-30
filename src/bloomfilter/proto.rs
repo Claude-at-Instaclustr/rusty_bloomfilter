@@ -120,5 +120,4 @@ mod tests {
         let bloomfilter2 = Simple::instance(&shape, &collection2);
         assert_eq!(*bloomfilter2.indicies(), [0, 1, 2, 16]);
     }
-
 }
