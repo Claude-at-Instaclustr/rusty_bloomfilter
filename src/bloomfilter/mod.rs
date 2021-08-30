@@ -20,10 +20,13 @@ pub trait BloomFilter {
     /// implementation is used.  Otherwise the Simple implementaiton is used.
     /// If the bloom filter arguments are not of Simple or Sparse they will be treated as though
     /// they were.  (e.g. no special handling for other types)
-    fn merge(&self, other: &BloomFilterType) -> Result<BloomFilterType, &str>
-    {
+    fn merge(&self, other: &BloomFilterType) -> Result<BloomFilterType, &str> {
         if self.shape().equivalent_to(other.shape()) {
-            print!("Shapes do not match {:#?} {:#?}", self.shape(), other.shape());
+            print!(
+                "Shapes do not match {:#?} {:#?}",
+                self.shape(),
+                other.shape()
+            );
             return Err("Shapes do not match");
         }
         if (self.hamming_value() + other.hamming_value()) < self.shape().number_of_buckets() {
@@ -112,9 +115,9 @@ pub trait BloomFilter {
                 return Ok(other.indicies().iter().all(|s| self.vector().contains(*s)));
             } else {
                 print!("other is not sparse\n");
-                let v1 :&BitVector = &self.vector();
-                let v2 :&BitVector = &other.vector();
-                return Ok( (v1 & v2 ).len() == v2.len());
+                let v1: &BitVector = &self.vector();
+                let v2: &BitVector = &other.vector();
+                return Ok((v1 & v2).len() == v2.len());
             }
         }
     }
@@ -444,13 +447,13 @@ mod tests {
         let shape = Shape { m: 60, k: 2 };
         let proto = SimpleProto::new(1);
         let mut bloomfilter = Simple::instance(&shape, &proto);
-        let proto2 = SimpleProto::new( 0x100 );
+        let proto2 = SimpleProto::new(0x100);
         let bloomfilter2 = Simple::instance(&shape, &proto2);
 
-        assert!( bloomfilter.merge_inplace( &bloomfilter2 ).unwrap() );
+        assert!(bloomfilter.merge_inplace(&bloomfilter2).unwrap());
         assert_eq!(*bloomfilter.indicies(), [0, 1, 16]);
 
-        assert!( bloomfilter.contains( &bloomfilter2 ).unwrap() );
+        assert!(bloomfilter.contains(&bloomfilter2).unwrap());
     }
 
     #[test]
@@ -458,13 +461,12 @@ mod tests {
         let shape = Shape { m: 60, k: 2 };
         let proto = SimpleProto::new(1);
         let bloomfilter = Simple::instance(&shape, &proto);
-        let proto2 = SimpleProto::new( 0x100 );
+        let proto2 = SimpleProto::new(0x100);
         let bloomfilter2 = Simple::instance(&shape, &proto2);
 
-        let bloomfilter3 = bloomfilter.merge(&bloomfilter2 ).unwrap();
+        let bloomfilter3 = bloomfilter.merge(&bloomfilter2).unwrap();
         assert_eq!(*bloomfilter3.indicies(), [0, 1, 16]);
-        assert!( bloomfilter3.contains( &bloomfilter ).unwrap());
-        assert!( bloomfilter3.contains( &bloomfilter2 ).unwrap());
+        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter3.contains(&bloomfilter2).unwrap());
     }
-
 }
