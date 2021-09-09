@@ -9,6 +9,8 @@ pub trait Proto {
     /// unique values.
     fn bits(&self, shape: &Shape) -> Vec<usize>;
     fn size(&self) -> usize;
+
+
 }
 
 /// A Proto implementation that is a collection of Protos.  That acts as a single proto
@@ -115,18 +117,18 @@ mod tests {
         collection.add(Box::new(proto2));
         assert_eq!(collection.count(), 2);
         let bloomfilter = Simple::instance(&shape, &collection);
-        assert_eq!(*bloomfilter.indicies(), [0, 1, 2]);
+        assert_eq!(*bloomfilter.indices(), [0, 1, 2]);
 
         //
         // test collection containing a collection
         //
 
-        // this should yeild bits 0 and 16 (65536)
+        // this should yield bits 0 and 16 (65536)
         let proto3 = SimpleProto::new(0x100);
         let mut collection2 = ProtoCollection::new();
         collection2.add(Box::new(collection));
         collection2.add(Box::new(proto3));
         let bloomfilter2 = Simple::instance(&shape, &collection2);
-        assert_eq!(*bloomfilter2.indicies(), [0, 1, 2, 16]);
+        assert_eq!(*bloomfilter2.indices(), [0, 1, 2, 16]);
     }
 }
