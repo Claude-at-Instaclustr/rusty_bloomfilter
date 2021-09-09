@@ -7,11 +7,13 @@ pub struct Counting {
     buffer: Vec<u64>,
 }
 
+/// An implementation of a Counting Bloom filter.
+/// This implementation uses u64 integers for the accumulators.
 impl Counting {
     /// Create an empty Counting instance.
     ///
-    /// # param
-    /// shape - The shape of the Bloom filter.
+    /// # Arguments
+    /// * `shape` - The shape of the Bloom filter.
     pub fn empty_instance(shape: &Shape) -> BloomFilterType {
         let v: Vec<u64> = vec![0; shape.number_of_buckets()];
         Box::new(Counting {
@@ -22,9 +24,9 @@ impl Counting {
 
     /// Create a Counting instance from a proto type.
     ///
-    /// # param
-    /// shape - The shape of the Bloom filter.
-    /// proto - The prototype for the filter.
+    /// # Arguments
+    /// * `shape` - The shape of the Bloom filter.
+    /// * `proto` - The prototype for the filter.
     pub fn instance(shape: &Shape, proto: &dyn Proto) -> BloomFilterType {
         let mut v: Vec<u64> = vec![0; shape.number_of_buckets()];
         proto.bits(&shape).iter().for_each(|s| {
@@ -42,9 +44,13 @@ impl Counting {
     /// the counts for each cell in the other Counting filter are added to the counts in this
     /// Counting filter.
     ///
-    /// # Param
-    /// other - The Counting filter to add to this one.
-    pub fn add(&mut self, other: &Counting) -> Result<bool, &str> {
+    /// # Arguments
+    /// * `other` - The Counting filter to add to this one.
+    ///
+    /// # Errors
+    /// * Returns the an Err with the string "Can not increment counters" on failure.
+    ///
+    pub fn add(&mut self, other: &Counting) -> Result<(), &str> {
         let x = &other.buffer;
         if !Counting::can_increment(&self.buffer, &x) {
             Err("Can not increment counts")
@@ -53,24 +59,35 @@ impl Counting {
             for (a, b) in enum_iter {
                 self.buffer[a] += b;
             }
-            Ok(true)
+            Ok(())
         }
     }
 
-    fn can_increment(mine: &Vec<u64>, buffer: &Vec<u64>) -> bool {
-        buffer
+    /// Test if the bit counts in our buffer can be incremented by the bit counts in their buffer
+    ///
+    /// # Arguments
+    /// * `ours` - The vector to check against.
+    /// * `theirs` - The vector to check with.
+    ///
+    fn can_increment(ours: &Vec<u64>, theirs: &Vec<u64>) -> bool {
+        theirs
             .iter()
             .enumerate()
             .filter(|(_a, b)| **b > 0)
-            .all(|(a, b)| mine[a] < (u64::MAX - b))
+            .all(|(a, b)| ours[a] < (u64::MAX - b))
     }
 
-    fn can_decrement(mine: &Vec<u64>, buffer: &Vec<u64>) -> bool {
-        buffer
+    /// Test if the bit counts in our buffer can be decremented by the bit counts in their buffer
+    ///
+    /// # Arguments
+    /// * `ours` - The vector to check against.
+    /// * `theirs` - The vector to check with.
+    fn can_decrement(ours: &Vec<u64>, theirs: &Vec<u64>) -> bool {
+        theirs
             .iter()
             .enumerate()
             .filter(|(_a, b)| **b > 0)
-            .all(|(a, b)| mine[a] < *b)
+            .all(|(a, b)| ours[a] < *b)
     }
 
     /// Subtracts another Counting filter from this one.  This is not the same as a `remove`
@@ -78,8 +95,12 @@ impl Counting {
     /// the counts for each cell in the other Counting filter are subtracted to the counts in this
     /// Counting filter.
     ///
-    /// # Param
-    /// other - The Counting filter to subtract from this one.
+    /// # Arguments
+    /// * `other` - The Counting filter to subtract from this one.
+    ///
+    /// # Errors
+    /// * Returns the an Err with the string "Can not decrement counters" on failure.
+    ///
     pub fn subtract(&mut self, other: &Counting) -> Result<bool, &str> {
         let x = &other.buffer;
         if !Counting::can_decrement(&self.buffer, &x) {
@@ -93,16 +114,32 @@ impl Counting {
         }
     }
 
-    fn can_increment_standard(mine: &Vec<u64>, buffer: &Vec<usize>) -> bool {
-        let limit = u64::MAX - 1;
-        buffer.iter().all(|idx| mine[*idx] < limit)
+    /// Test if the bit counts in our buffer specified by indices can be incremented by one.
+    ///
+    /// # Arguments
+    /// * `ours` - The vector to check against.
+    /// * `indices` - The vector of indices to check.
+    fn can_increment_standard(mine: &Vec<u64>, indices: &Vec<usize>) -> bool {
+        indices.iter().all(|idx| mine[*idx] < u64::MAX)
     }
 
+    /// Test if the bit counts in our buffer specified by indices can be decremented by one.
+    ///
+    /// # Arguments
+    /// * `ours` - The vector to check against.
+    /// * `indices` - The vector of indices to check.
     fn can_decrement_standard(mine: &Vec<u64>, buffer: &Vec<usize>) -> bool {
         buffer.iter().all(|idx| mine[*idx] == 0)
     }
     /// Removes (deletes) a merged Bloom filter from this one.  This is the inverse of a
     /// `merge_inplace`  operation.
+    ///
+    /// # Arguments
+    /// * `other` - The bloom filter to remove from this one.
+    ///
+    /// # Errors
+    /// * Returns the an Err with the string "Can not decrement counters" on failure.
+    ///
     pub fn remove(&mut self, other: &BloomFilterType) -> Result<(), &str> {
         let other_vec: &Vec<usize> = &other.indices();
         if !Counting::can_decrement_standard(&self.buffer, other_vec) {
@@ -124,13 +161,28 @@ impl Clone for Counting {
 }
 
 impl BloomFilter for Counting {
-    /// merge this filter with another to make a new filter
+    /// Merges this filter with another to make a new Counting Bloom filter.
+    ///
+    /// # Arguments
+    /// * `other` - The bloom filter to merge with this one.
+    ///
+    /// # Errors
+    /// * Returns the an Err with the string "Can not increment counters" on failure.
+    ///
     fn merge(&self, other: &BloomFilterType) -> Result<BloomFilterType, &str> {
         let mut result = self.clone();
         result.merge_inplace(&other)?;
         Ok(Box::new(result))
     }
 
+    /// Merges the other filter into this filter.
+    ///
+    /// # Arguments
+    /// * `other` - The bloom filter to merge with this one.
+    ///
+    /// # Errors
+    /// * Returns the an Err with the string "Can not increment counters" on failure.
+    ///
     fn merge_inplace<'a>(&mut self, other: &BloomFilterType) -> Result<(), &'a str> {
         let other_vec: &Vec<usize> = &other.indices();
         if !Counting::can_increment_standard(&self.buffer, other_vec) {
@@ -141,11 +193,12 @@ impl BloomFilter for Counting {
         }
     }
 
+    /// Always returns `true`.   this is sparse as it is faster to generate the list of indices
+    /// than to generate BitVectors.
     fn is_sparse(&self) -> bool {
         true
     }
 
-    /// return the filter as a BitVector.
     fn vector(&self) -> Rc<BitVector> {
         let x = &self.buffer;
         let mut bv = BitVector::new(self.shape.m);
@@ -158,7 +211,6 @@ impl BloomFilter for Counting {
         Rc::new(bv)
     }
 
-    /// return a list of the bits that are turned on.
     fn indices(&self) -> Rc<Vec<usize>> {
         let x = &self.buffer;
         let new_vec = x

@@ -5,9 +5,13 @@ use crate::bloomfilter::*;
 /// Proto bloom filters can build filters of any shape.
 /// Proto filters process the hash function to build the filter based on shape.
 pub trait Proto {
-    /// creates an iterator of bits to enable based on the shape.  These should be
-    /// unique values.
+    /// Creates an iterator of bits to enable based on the shape.
+    ///
+    /// # Arguments
+    /// * `shape` - The shape of the resulting Bloom filter.
     fn bits(&self, shape: &Shape) -> Vec<usize>;
+
+    /// Returns the number of items in this proto.
     fn size(&self) -> usize;
 }
 
@@ -26,10 +30,35 @@ pub struct SimpleProto {
 }
 /// The simple prototype
 impl SimpleProto {
-    pub fn new(full: u128) -> SimpleProto {
-        let start = (full >> 64) as u64;
-        let incr = full as u64;
+    /// Creates a new Simple proto from a u128
+    ///
+    /// # Arguments
+    /// * `hash` - A 128bit hash value as a u128.
+    pub fn from_u128(hash: u128) -> SimpleProto {
+        let start = (hash >> 64) as u64;
+        let incr = hash as u64;
 
+        return SimpleProto { start, incr };
+    }
+
+    /// Creates a new Simple proto from a u64.
+    ///
+    /// # Arguments
+    /// * `hash` - A 64bit hash value as a u64.
+    pub fn from_u64(hash: u64) -> SimpleProto {
+        let start = (hash >> 32) as u64;
+        let incr = (hash & 0xFFFFFFFF) as u64;
+
+        return SimpleProto { start, incr };
+    }
+
+    /// Creates a new Simple proto from a u32.
+    ///
+    /// # Arguments
+    /// * `hash` - A 32bit hash value as a u32.
+    pub fn from_u32(hash: u32) -> SimpleProto {
+        let start = (hash >> 16) as u64;
+        let incr = (hash & 0xFFFF) as u64;
         return SimpleProto { start, incr };
     }
 }
@@ -58,11 +87,15 @@ impl ProtoCollection {
     }
 
     /// Add prototypes to the collection
+    ///
+    /// # Arguments
+    /// * `proto` - A proto to add.  May be a ProtoCollection.
     pub fn add(&mut self, proto: Box<dyn Proto>) {
         self.inner.push(proto);
     }
 
-    /// Gets the number of Protos in the collection
+    /// Gets the number of `Proto`s in the collection.  This is not the same as `size()` as
+    /// `size()` return the number of `SimpleProto`'s in the collection.
     pub fn count(&self) -> usize {
         return self.inner.len();
     }
@@ -70,8 +103,6 @@ impl ProtoCollection {
 
 impl Proto for ProtoCollection {
     fn bits(&self, shape: &Shape) -> Vec<usize> {
-        //let v : Vec::<usize> = Vec::with_capacity( self.k * self.inner.len() );
-
         return self.inner.iter().flat_map(|s| s.bits(shape)).collect();
     }
 
@@ -87,14 +118,14 @@ mod tests {
 
     #[test]
     fn simple_proto_correct() {
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         assert_eq!(proto.start, 0);
         assert_eq!(proto.incr, 1);
     }
 
     #[test]
     fn simple_proto_bits() {
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let shape = Shape { m: 10, k: 2 };
         let v = proto.bits(&shape);
 
@@ -107,9 +138,9 @@ mod tests {
     fn proto_collection() {
         let shape = Shape { m: 60, k: 2 };
         // this proto will turn on the left 'k' most bits
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         // this proto will turn on the every other bit for a total of 'k' bits
-        let proto2 = SimpleProto::new(2);
+        let proto2 = SimpleProto::from_u32(2);
         let mut collection = ProtoCollection::new();
         collection.add(Box::new(proto));
         collection.add(Box::new(proto2));
@@ -122,7 +153,7 @@ mod tests {
         //
 
         // this should yield bits 0 and 16 (65536)
-        let proto3 = SimpleProto::new(0x100);
+        let proto3 = SimpleProto::from_u32(0x100);
         let mut collection2 = ProtoCollection::new();
         collection2.add(Box::new(collection));
         collection2.add(Box::new(proto3));

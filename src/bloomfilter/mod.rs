@@ -25,9 +25,11 @@ pub trait BloomFilter {
     /// If the bloom filter arguments are not of Simple or Sparse they will be treated as though
     /// they were.  (e.g. no special handling for other types)
     ///
-    /// # Params
     /// Other implementations may exist in other BloomFilter implementations.  Those implementations
     /// are expected to produce new instances of their type.
+    ///
+    /// # Arguments
+    /// * `other` - The other bloom filter to merge
     fn merge(&self, other: &BloomFilterType) -> Result<BloomFilterType, &str> {
         if (self.hamming_value() + other.hamming_value()) < self.shape().number_of_buckets() {
             // create a sparse one
@@ -51,9 +53,12 @@ pub trait BloomFilter {
         }
     }
 
-    /// Updates this filter by merging the values from the other filter
+    /// Updates this filter by merging the values from the other filter.
     /// This is an atomic function in that it either works or it fails, but if it fails
     /// the internal structure is as it was before the method was called.
+    ///
+    /// # Arguments
+    /// * `other` - The other bloom filter to merge into this one.
     fn merge_inplace<'a>(&mut self, other: &BloomFilterType) -> Result<(), &'a str>;
 
     /// Merges a proto Bloom filter into a bloom filter.  In the default implementation, if the
@@ -62,12 +67,20 @@ pub trait BloomFilter {
     ///
     /// Other implementations may exist in other BloomFilter implementations.  Those implementations
     /// are expected to produce new instances of their type.
+    ///
+    /// # Arguments
+    /// * `proto` - The proto bloom filter to merge into this one.
     fn merge_proto(&self, proto: &dyn Proto) -> Result<BloomFilterType, &str> {
         let other = BloomFilterFactory::materialize(self.shape(), proto);
         return self.merge(&other);
     }
 
     /// Merges a proto Bloom filter into this bloom filter.
+    /// This is an atomic function in that it either works or it fails, but if it fails
+    /// the internal structure is as it was before the method was called.
+    ///
+    /// # Arguments
+    /// * `proto` - The proto bloom filter to merge into this one.
     fn merge_proto_inplace<'a>(&mut self, proto: &dyn Proto) -> Result<(), &'a str> {
         let other = BloomFilterFactory::materialize(self.shape(), proto);
         return self.merge_inplace(&other);
@@ -78,7 +91,7 @@ pub trait BloomFilter {
     /// it may be easier to produce a representation as a list of index values (sparse) or a
     /// BitVector (not sparse).
     fn is_sparse(&self) -> bool {
-        self.hamming_value() < self.shape().number_of_buckets()
+        self.shape().is_sparse(self.hamming_value())
     }
 
     /// Returns a the BitVector that represents this bloom filter.
@@ -94,15 +107,20 @@ pub trait BloomFilter {
     /// Gets the hamming value (the number of bits turned on).
     fn hamming_value(&self) -> usize;
 
-    /// Determines if this filter contains the proto
-    fn contains_proto(&self, proto: &dyn Proto) -> Result<bool, &str> {
+    /// Determines if this filter contains the proto Bloom filter.
+    ///
+    /// # Arguments
+    /// * `proto` - The proto bloom filter to check.
+    fn contains_proto(&self, proto: &dyn Proto) -> bool {
         let other = BloomFilterFactory::materialize(self.shape(), proto);
         return self.contains(&other);
     }
 
     /// Determines if this filter contains the other filter.
     ///
-    fn contains(&self, other: &BloomFilterType) -> Result<bool, &str> {
+    /// # Arguments
+    /// * `other` - The other bloom filter to check.
+    fn contains(&self, other: &BloomFilterType) -> bool {
         // this is counter intuitive.  We skip all the matches and find the first
         // non matching BitBucket.  If after this there next() return None then the
         // the filters match.
@@ -111,29 +129,29 @@ pub trait BloomFilter {
             if other.is_sparse() {
                 print!(" other is sparse\n");
                 if other.indices().len() > self.indices().len() {
-                    Ok(false)
+                    false
                 } else {
-                    Ok(other
+                    other
                         .indices()
                         .iter()
-                        .all(|s| self.indices().binary_search(&s).is_ok()))
+                        .all(|s| self.indices().binary_search(&s).is_ok())
                 }
             } else {
                 print!("other is not sparse\n");
                 let x: &BitVector = &other.vector();
-                Ok(x.into_iter()
-                    .all(|s| self.indices().binary_search(&s).is_ok()))
+                x.into_iter()
+                    .all(|s| self.indices().binary_search(&s).is_ok())
             }
         } else {
             print!("self is not sparse, ");
             if other.is_sparse() {
                 print!("other is sparse\n");
-                Ok(other.indices().iter().all(|s| self.vector().contains(*s)))
+                other.indices().iter().all(|s| self.vector().contains(*s))
             } else {
                 print!("other is not sparse\n");
                 let v1: &BitVector = &self.vector();
                 let v2: &BitVector = &other.vector();
-                Ok((v1 & v2).len() == v2.len())
+                (v1 & v2).len() == v2.len()
             }
         };
     }
@@ -142,21 +160,26 @@ pub trait BloomFilter {
     //  SIZE METHODS
     //
 
-    /// Estimates the number of items in this filter
-    fn estimate_n(&self) -> f32 {
-        return self.shape().estimate_n(self.hamming_value());
+    /// Estimates the number of items in this filter.
+    fn estimate_n(&self) -> f64 {
+        self.shape().estimate_n(self.hamming_value())
     }
 
     /// Estimates the number of items in the union of the two filters.
-    fn estimate_union(&self, other: &BloomFilterType) -> Result<f32, &str> {
-        return Ok(self
-            .shape()
-            .estimate_n(self.vector().union(&other.vector()).len()));
+    ///
+    /// # Arguments
+    /// * `other` - The other bloom filter in the union.
+    fn estimate_union(&self, other: &BloomFilterType) -> f64 {
+        self.shape()
+            .estimate_n(self.vector().union(&other.vector()).len())
     }
 
     /// Estimates the number of items in the intersection of the two filters.
-    fn estimate_intersection(&self, other: &BloomFilterType) -> Result<f32, &str> {
-        return Ok(self.estimate_n() + other.estimate_n() - self.estimate_union(other).unwrap());
+    ///
+    /// # Arguments
+    /// * `other` - The other bloom filter in the intersection.
+    fn estimate_intersection(&self, other: &BloomFilterType) -> f64 {
+        self.estimate_n() + other.estimate_n() - self.estimate_union(other)
     }
 }
 
@@ -171,7 +194,7 @@ pub struct Shape {
 
 impl Shape {
     ///  Gets the number of u64 sized buckets necessary for to represent the bits.
-    fn number_of_buckets(&self) -> usize {
+    pub fn number_of_buckets(&self) -> usize {
         let mut len = self.m / 64;
         if self.m % 64 > 0 {
             len += 1;
@@ -179,11 +202,20 @@ impl Shape {
         len
     }
 
+    /// Determines if a bloom filter with hamming bits enabled would be considered "sparse" or not.
+    /// A sparse filter is one in which there are likely to be empty buckets.
+    ///
+    /// # Arguments
+    /// * `hamming` - The hamming value to check.
+    pub fn is_sparse(&self, hamming: usize) -> bool {
+        hamming < self.number_of_buckets()
+    }
+
     /// Checks if another shape is equivalent to this one.  Shapes are equivalent if the `m` and `k`
     /// values are the same.
     ///
-    /// # Param
-    /// * other - The other Shape to check against.
+    /// # Arguments
+    /// * `other` - The other Shape to check against.
     pub fn equivalent_to(&self, other: &Shape) -> bool {
         self.m != other.m || self.k != other.k
     }
@@ -191,8 +223,8 @@ impl Shape {
     /// Calculates the probability of false positives if `count` objects are added to a filter
     /// using this shape.
     ///
-    /// # Param
-    /// * count - The number of items in the Bloom filter.
+    /// # Arguments
+    /// * `count` - The number of items in the Bloom filter.
     pub fn false_positives(&self, count: usize) -> f64 {
         let k = self.k as f64;
         let n = count as f64;
@@ -203,15 +235,15 @@ impl Shape {
     /// Calculates the estimated number of items in a filter
     /// of this Shape.
     ///
-    /// # Param
-    /// * count - - he number of bits turned on in the filter.
+    /// # Arguments
+    /// * `count` - - he number of bits turned on in the filter.
     ///
-    pub fn estimate_n(&self, count: usize) -> f32 {
+    pub fn estimate_n(&self, count: usize) -> f64 {
         let c = count as f64;
         let m = self.m as f64;
         let k = self.k as f64;
         let result = -(m / k) * (1.0 - (c / m)).ln();
-        result as f32
+        result
     }
 }
 
@@ -225,8 +257,8 @@ pub struct Simple {
 impl Simple {
     /// Create an empty Simple instance
     ///
-    /// # param
-    /// shape - The shape of the Bloom filter.
+    /// # Arguments
+    /// * `shape` - The shape of the Bloom filter.
     pub fn empty_instance(shape: &Shape) -> BloomFilterType {
         Box::new(Simple {
             shape: shape.clone(),
@@ -236,13 +268,13 @@ impl Simple {
 
     /// Create a Simple instance from a proto type.
     ///
-    /// # param
-    /// shape - The shape of the Bloom filter.
-    /// proto - The prototype for the filter.
+    /// # Arguments
+    /// * `shape` - The shape of the Bloom filter.
+    /// * `proto` - The prototype for the filter.
     pub fn instance(shape: &Shape, proto: &dyn Proto) -> BloomFilterType {
         let mut v = BitVector::new(shape.number_of_buckets());
-        proto.bits(&shape).iter().for_each(|s| {
-            v.insert(*s);
+        proto.bits(&shape).into_iter().for_each(|s| {
+            v.insert(s);
         });
         let simple = Simple {
             shape: shape.clone(),
@@ -292,7 +324,11 @@ impl BloomFilter for Simple {
     }
 }
 
-/// A bloom filter that stores the bits in a BitVector
+/// A bloom filter that stores the index of the enabled bits.  Useful for Bloomfilters of shapes
+/// with large `m` and small `k` values.  Particularly where `k` < m/64.
+///
+/// # See
+/// * Shape.is_sparse()
 #[derive(Debug)]
 pub struct Sparse {
     shape: Shape,
@@ -302,8 +338,8 @@ pub struct Sparse {
 impl Sparse {
     /// Create an empty Sparse instance.
     ///
-    /// # param
-    /// shape - The shape of the Bloom filter.
+    /// # Arguments
+    /// * `shape` - The shape of the Bloom filter.
     pub fn empty_instance(shape: &Shape) -> BloomFilterType {
         Box::new(Sparse {
             shape: shape.clone(),
@@ -313,11 +349,13 @@ impl Sparse {
 
     /// Create a Sparse instance from a proto type.
     ///
-    /// # param
-    /// shape - The shape of the Bloom filter.
-    /// proto - The prototype for the filter.
+    /// # Arguments
+    /// * `shape` - The shape of the Bloom filter.
+    /// * `proto` - The prototype for the filter.
     pub fn instance(shape: &Shape, proto: &dyn Proto) -> BloomFilterType {
-        let v = proto.bits(&shape).iter().map(|x| *x).collect();
+        let mut v: Vec<usize> = proto.bits(&shape).into_iter().collect();
+        v.sort_unstable();
+        v.dedup();
         let sparse = Sparse {
             shape: shape.clone(),
             buffer: Rc::new(v),
@@ -328,8 +366,7 @@ impl Sparse {
 
 impl BloomFilter for Sparse {
     fn merge_inplace<'a>(&mut self, other: &BloomFilterType) -> Result<(), &'a str> {
-        let mut v: Vec<usize> = Vec::new();
-        self.buffer.iter().for_each(|s| v.push(*s));
+        let mut v: Vec<usize> = self.buffer.to_vec();
         if other.is_sparse() {
             other.indices().iter().for_each(|s| v.push(*s));
         } else {
@@ -400,13 +437,13 @@ mod tests {
         assert_eq!(bloomfilter.hamming_value(), 0);
         assert!(bloomfilter.estimate_n() < 0.05);
         // filter always contains itself
-        assert!(bloomfilter.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter));
     }
 
     #[test]
     fn filter_build_correct() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let bloomfilter = Simple::instance(&shape, &proto);
         assert_eq!(*bloomfilter.indices(), [0, 1]);
         let v = bloomfilter.vector();
@@ -416,25 +453,25 @@ mod tests {
         assert_eq!(bloomfilter.hamming_value(), 2);
         assert!(bloomfilter.estimate_n() - 1.0 < 0.05);
         // filter always contains itself
-        assert!(bloomfilter.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter));
         let empty_filter: BloomFilterType = Box::new(Simple {
             shape: shape.clone(),
             buffer: Rc::new(BitVector::new(shape.number_of_buckets())),
         });
         // a filter always contains the empty filter
-        assert!(bloomfilter.contains(&empty_filter).unwrap());
+        assert!(bloomfilter.contains(&empty_filter));
         // an empty filter never contains a populated filter
         print!("{:#?}", empty_filter.contains(&bloomfilter));
-        assert!(!empty_filter.contains(&bloomfilter).unwrap());
+        assert!(!empty_filter.contains(&bloomfilter));
         // an empty filter always contains itself
-        assert!(empty_filter.contains(&empty_filter).unwrap());
+        assert!(empty_filter.contains(&empty_filter));
     }
 
     #[test]
     fn contains_test_simple_by_simple() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
-        let proto2 = SimpleProto::new(5);
+        let proto = SimpleProto::from_u32(1);
+        let proto2 = SimpleProto::from_u32(5);
         let bloomfilter = Simple::instance(&shape, &proto);
 
         let mut bloomfilter2 = Simple::instance(&shape, &proto);
@@ -453,30 +490,30 @@ mod tests {
         });
 
         // filter always contains itself
-        assert!(bloomfilter.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter));
         // a filter always contains the empty filter
-        assert!(bloomfilter.contains(&simple_empty_filter).unwrap());
-        assert!(bloomfilter.contains(&sparse_empty_filter).unwrap());
+        assert!(bloomfilter.contains(&simple_empty_filter));
+        assert!(bloomfilter.contains(&sparse_empty_filter));
         // an empty filter never contains a populated filter
-        assert!(!simple_empty_filter.contains(&bloomfilter).unwrap());
-        assert!(!sparse_empty_filter.contains(&bloomfilter).unwrap());
+        assert!(!simple_empty_filter.contains(&bloomfilter));
+        assert!(!sparse_empty_filter.contains(&bloomfilter));
         // an empty filter always contains itself
-        assert!(simple_empty_filter.contains(&simple_empty_filter).unwrap());
-        assert!(simple_empty_filter.contains(&sparse_empty_filter).unwrap());
-        assert!(sparse_empty_filter.contains(&simple_empty_filter).unwrap());
-        assert!(sparse_empty_filter.contains(&sparse_empty_filter).unwrap());
+        assert!(simple_empty_filter.contains(&simple_empty_filter));
+        assert!(simple_empty_filter.contains(&sparse_empty_filter));
+        assert!(sparse_empty_filter.contains(&simple_empty_filter));
+        assert!(sparse_empty_filter.contains(&sparse_empty_filter));
 
         // bloom filter2 contains bloom filter 1
-        assert!(bloomfilter2.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter2.contains(&bloomfilter));
         // bloom filter1 does not contain bloom filter 2
-        assert!(!bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(!bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn contains_test_simple_by_sparse() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
-        let proto2 = SimpleProto::new(5);
+        let proto = SimpleProto::from_u32(1);
+        let proto2 = SimpleProto::from_u32(5);
         let bloomfilter = Simple::instance(&shape, &proto);
 
         let mut bloomfilter2 = Sparse::instance(&shape, &proto);
@@ -495,30 +532,30 @@ mod tests {
         });
 
         // filter always contains itself
-        assert!(bloomfilter.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter));
         // a filter always contains the empty filter
-        assert!(bloomfilter.contains(&simple_empty_filter).unwrap());
-        assert!(bloomfilter.contains(&sparse_empty_filter).unwrap());
+        assert!(bloomfilter.contains(&simple_empty_filter));
+        assert!(bloomfilter.contains(&sparse_empty_filter));
         // an empty filter never contains a populated filter
-        assert!(!simple_empty_filter.contains(&bloomfilter).unwrap());
-        assert!(!sparse_empty_filter.contains(&bloomfilter).unwrap());
+        assert!(!simple_empty_filter.contains(&bloomfilter));
+        assert!(!sparse_empty_filter.contains(&bloomfilter));
         // an empty filter always contains itself
-        assert!(simple_empty_filter.contains(&simple_empty_filter).unwrap());
-        assert!(simple_empty_filter.contains(&sparse_empty_filter).unwrap());
-        assert!(sparse_empty_filter.contains(&simple_empty_filter).unwrap());
-        assert!(sparse_empty_filter.contains(&sparse_empty_filter).unwrap());
+        assert!(simple_empty_filter.contains(&simple_empty_filter));
+        assert!(simple_empty_filter.contains(&sparse_empty_filter));
+        assert!(sparse_empty_filter.contains(&simple_empty_filter));
+        assert!(sparse_empty_filter.contains(&sparse_empty_filter));
 
         // bloom filter2 contains bloom filter 1
-        assert!(bloomfilter2.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter2.contains(&bloomfilter));
         // bloom filter1 does not contain bloom filter 2
-        assert!(!bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(!bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn contains_test_sparse_by_simple() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
-        let proto2 = SimpleProto::new(5);
+        let proto = SimpleProto::from_u32(1);
+        let proto2 = SimpleProto::from_u32(5);
         let bloomfilter = Sparse::instance(&shape, &proto);
 
         let mut bloomfilter2 = Simple::instance(&shape, &proto);
@@ -537,30 +574,30 @@ mod tests {
         });
 
         // filter always contains itself
-        assert!(bloomfilter.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter));
         // a filter always contains the empty filter
-        assert!(bloomfilter.contains(&simple_empty_filter).unwrap());
-        assert!(bloomfilter.contains(&sparse_empty_filter).unwrap());
+        assert!(bloomfilter.contains(&simple_empty_filter));
+        assert!(bloomfilter.contains(&sparse_empty_filter));
         // an empty filter never contains a populated filter
-        assert!(!simple_empty_filter.contains(&bloomfilter).unwrap());
-        assert!(!sparse_empty_filter.contains(&bloomfilter).unwrap());
+        assert!(!simple_empty_filter.contains(&bloomfilter));
+        assert!(!sparse_empty_filter.contains(&bloomfilter));
         // an empty filter always contains itself
-        assert!(simple_empty_filter.contains(&simple_empty_filter).unwrap());
-        assert!(simple_empty_filter.contains(&sparse_empty_filter).unwrap());
-        assert!(sparse_empty_filter.contains(&simple_empty_filter).unwrap());
-        assert!(sparse_empty_filter.contains(&sparse_empty_filter).unwrap());
+        assert!(simple_empty_filter.contains(&simple_empty_filter));
+        assert!(simple_empty_filter.contains(&sparse_empty_filter));
+        assert!(sparse_empty_filter.contains(&simple_empty_filter));
+        assert!(sparse_empty_filter.contains(&sparse_empty_filter));
 
         // bloom filter2 contains bloom filter 1
-        assert!(bloomfilter2.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter2.contains(&bloomfilter));
         // bloom filter1 does not contain bloom filter 2
-        assert!(!bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(!bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn contains_test_sparse_by_sparse() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
-        let proto2 = SimpleProto::new(5);
+        let proto = SimpleProto::from_u32(1);
+        let proto2 = SimpleProto::from_u32(5);
         let bloomfilter = Sparse::instance(&shape, &proto);
 
         let mut bloomfilter2 = Sparse::instance(&shape, &proto);
@@ -579,170 +616,170 @@ mod tests {
         });
 
         // filter always contains itself
-        assert!(bloomfilter.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter));
         // a filter always contains the empty filter
-        assert!(bloomfilter.contains(&simple_empty_filter).unwrap());
-        assert!(bloomfilter.contains(&sparse_empty_filter).unwrap());
+        assert!(bloomfilter.contains(&simple_empty_filter));
+        assert!(bloomfilter.contains(&sparse_empty_filter));
         // an empty filter never contains a populated filter
-        assert!(!simple_empty_filter.contains(&bloomfilter).unwrap());
-        assert!(!sparse_empty_filter.contains(&bloomfilter).unwrap());
+        assert!(!simple_empty_filter.contains(&bloomfilter));
+        assert!(!sparse_empty_filter.contains(&bloomfilter));
         // an empty filter always contains itself
-        assert!(simple_empty_filter.contains(&simple_empty_filter).unwrap());
-        assert!(simple_empty_filter.contains(&sparse_empty_filter).unwrap());
-        assert!(sparse_empty_filter.contains(&simple_empty_filter).unwrap());
-        assert!(sparse_empty_filter.contains(&sparse_empty_filter).unwrap());
+        assert!(simple_empty_filter.contains(&simple_empty_filter));
+        assert!(simple_empty_filter.contains(&sparse_empty_filter));
+        assert!(sparse_empty_filter.contains(&simple_empty_filter));
+        assert!(sparse_empty_filter.contains(&sparse_empty_filter));
 
         // bloom filter2 contains bloom filter 1
-        assert!(bloomfilter2.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter2.contains(&bloomfilter));
         // bloom filter1 does not contain bloom filter 2
-        assert!(!bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(!bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn shape_used_multiple_times() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let bloomfilter = Simple::instance(&shape, &proto);
         let bloomfilter2 = Simple::instance(&shape, &proto);
         assert_eq!(*bloomfilter.indices(), [0, 1]);
         assert_eq!(*bloomfilter2.indices(), [0, 1]);
-        assert!(bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_inplace_test_simple_by_simple() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let mut bloomfilter = Simple::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
         let bloomfilter2 = Simple::instance(&shape, &proto2);
 
         assert!(bloomfilter.merge_inplace(&bloomfilter2).is_ok());
         assert_eq!(*bloomfilter.indices(), [0, 1, 16]);
 
-        assert!(bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_inplace_test_simple_by_sparse() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let mut bloomfilter = Simple::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
         let bloomfilter2 = Sparse::instance(&shape, &proto2);
 
         assert!(bloomfilter.merge_inplace(&bloomfilter2).is_ok());
         assert_eq!(*bloomfilter.indices(), [0, 1, 16]);
 
-        assert!(bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_inplace_test_sparse_by_simple() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let mut bloomfilter = Sparse::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
         let bloomfilter2 = Simple::instance(&shape, &proto2);
 
         assert!(bloomfilter.merge_inplace(&bloomfilter2).is_ok());
         assert_eq!(*bloomfilter.indices(), [0, 1, 16]);
 
-        assert!(bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_inplace_test_sparse_by_sparse() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let mut bloomfilter = Sparse::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
         let bloomfilter2 = Sparse::instance(&shape, &proto2);
 
         assert!(bloomfilter.merge_inplace(&bloomfilter2).is_ok());
         assert_eq!(*bloomfilter.indices(), [0, 1, 16]);
 
-        assert!(bloomfilter.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_test_simple_by_simple() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let bloomfilter = Simple::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
         let bloomfilter2 = Simple::instance(&shape, &proto2);
 
         let bloomfilter3 = bloomfilter.merge(&bloomfilter2).unwrap();
         assert_eq!(*bloomfilter3.indices(), [0, 1, 16]);
-        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
-        assert!(bloomfilter3.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter3.contains(&bloomfilter));
+        assert!(bloomfilter3.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_test_simple_by_sparse() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let bloomfilter = Simple::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
         let bloomfilter2 = Sparse::instance(&shape, &proto2);
 
         let bloomfilter3 = bloomfilter.merge(&bloomfilter2).unwrap();
         assert_eq!(*bloomfilter3.indices(), [0, 1, 16]);
-        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
-        assert!(bloomfilter3.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter3.contains(&bloomfilter));
+        assert!(bloomfilter3.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_test_sparse_by_simple() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let bloomfilter = Sparse::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
         let bloomfilter2 = Simple::instance(&shape, &proto2);
 
         let bloomfilter3 = bloomfilter.merge(&bloomfilter2).unwrap();
         assert_eq!(*bloomfilter3.indices(), [0, 1, 16]);
-        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
-        assert!(bloomfilter3.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter3.contains(&bloomfilter));
+        assert!(bloomfilter3.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_test_sparse_by_sparse() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let bloomfilter = Sparse::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
         let bloomfilter2 = Sparse::instance(&shape, &proto2);
 
         let bloomfilter3 = bloomfilter.merge(&bloomfilter2).unwrap();
         assert_eq!(*bloomfilter3.indices(), [0, 1, 16]);
-        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
-        assert!(bloomfilter3.contains(&bloomfilter2).unwrap());
+        assert!(bloomfilter3.contains(&bloomfilter));
+        assert!(bloomfilter3.contains(&bloomfilter2));
     }
 
     #[test]
     fn filter_merge_test_simple_by_proto() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let bloomfilter = Simple::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
 
         let bloomfilter3 = bloomfilter.merge_proto(&proto2).unwrap();
         assert_eq!(*bloomfilter3.indices(), [0, 1, 16]);
-        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter3.contains(&bloomfilter));
     }
 
     #[test]
     fn filter_merge_test_sparse_by_proto() {
         let shape = Shape { m: 60, k: 2 };
-        let proto = SimpleProto::new(1);
+        let proto = SimpleProto::from_u32(1);
         let bloomfilter = Sparse::instance(&shape, &proto);
-        let proto2 = SimpleProto::new(0x100);
+        let proto2 = SimpleProto::from_u32(0x100);
 
         let bloomfilter3 = bloomfilter.merge_proto(&proto2).unwrap();
         assert_eq!(*bloomfilter3.indices(), [0, 1, 16]);
-        assert!(bloomfilter3.contains(&bloomfilter).unwrap());
+        assert!(bloomfilter3.contains(&bloomfilter));
     }
 }
 
@@ -750,6 +787,10 @@ pub struct BloomFilterFactory {}
 
 impl BloomFilterFactory {
     /// Materializes the proto as a standard Sparse or Simple instance.
+    ///
+    /// # Arguments
+    /// * `shape` - the shape of the filter to materialize
+    /// * `proto` - A proto Bloom filter to materialize from.
     fn materialize(shape: &Shape, proto: &dyn Proto) -> BloomFilterType {
         if proto.size() * shape.k < shape.m {
             Sparse::instance(shape, proto)
