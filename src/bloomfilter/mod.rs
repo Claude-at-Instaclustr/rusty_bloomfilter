@@ -1,5 +1,5 @@
-pub mod proto;
 pub mod counting;
+pub mod proto;
 
 use crate::bloomfilter::proto::Proto;
 use bitvector::*;
@@ -9,7 +9,6 @@ use std::vec::Vec;
 type BloomFilterType = Box<dyn BloomFilter>;
 
 /// The interface between the internal and external representations of the contents of a Bloom filter.
-
 
 /// The traits that all BloomFilters must share.
 ///
@@ -64,13 +63,13 @@ pub trait BloomFilter {
     /// Other implementations may exist in other BloomFilter implementations.  Those implementations
     /// are expected to produce new instances of their type.
     fn merge_proto(&self, proto: &dyn Proto) -> Result<BloomFilterType, &str> {
-        let other = BloomFilterFactory::materialize( self.shape(), proto );
+        let other = BloomFilterFactory::materialize(self.shape(), proto);
         return self.merge(&other);
     }
 
     /// Merges a proto Bloom filter into this bloom filter.
     fn merge_proto_inplace<'a>(&mut self, proto: &dyn Proto) -> Result<(), &'a str> {
-        let other =BloomFilterFactory::materialize( self.shape(), proto );
+        let other = BloomFilterFactory::materialize(self.shape(), proto);
         return self.merge_inplace(&other);
     }
 
@@ -97,7 +96,7 @@ pub trait BloomFilter {
 
     /// Determines if this filter contains the proto
     fn contains_proto(&self, proto: &dyn Proto) -> Result<bool, &str> {
-        let other = BloomFilterFactory::materialize( self.shape(), proto );
+        let other = BloomFilterFactory::materialize(self.shape(), proto);
         return self.contains(&other);
     }
 
@@ -122,8 +121,7 @@ pub trait BloomFilter {
             } else {
                 print!("other is not sparse\n");
                 let x: &BitVector = &other.vector();
-                Ok(x
-                    .into_iter()
+                Ok(x.into_iter()
                     .all(|s| self.indices().binary_search(&s).is_ok()))
             }
         } else {
@@ -137,7 +135,7 @@ pub trait BloomFilter {
                 let v2: &BitVector = &other.vector();
                 Ok((v1 & v2).len() == v2.len())
             }
-        }
+        };
     }
 
     //
@@ -754,7 +752,7 @@ impl BloomFilterFactory {
     /// Materializes the proto as a standard Sparse or Simple instance.
     fn materialize(shape: &Shape, proto: &dyn Proto) -> BloomFilterType {
         if proto.size() * shape.k < shape.m {
-            Sparse::instance( shape, proto)
+            Sparse::instance(shape, proto)
         } else {
             Simple::instance(shape, proto)
         }

@@ -9,8 +9,6 @@ pub trait Proto {
     /// unique values.
     fn bits(&self, shape: &Shape) -> Vec<usize>;
     fn size(&self) -> usize;
-
-
 }
 
 /// A Proto implementation that is a collection of Protos.  That acts as a single proto
