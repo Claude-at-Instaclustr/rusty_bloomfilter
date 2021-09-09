@@ -132,7 +132,7 @@ impl BloomFilter for Counting {
         Ok(Box::new(result) )
     }
 
-    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<(), &str> {
+    fn merge_inplace<'a>(&mut self, other: &BloomFilterType) -> Result<(), &'a str> {
         let other_vec: &Vec<usize> = &other.indices();
         if ! Counting::can_increment_standard(&self.buffer, other_vec) {
             Err( "Can not increment counters")

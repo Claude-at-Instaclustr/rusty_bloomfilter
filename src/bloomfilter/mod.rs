@@ -55,7 +55,7 @@ pub trait BloomFilter {
     /// Updates this filter by merging the values from the other filter
     /// This is an atomic function in that it either works or it fails, but if it fails
     /// the internal structure is as it was before the method was called.
-    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<(), &str>;
+    fn merge_inplace<'a>(&mut self, other: &BloomFilterType) -> Result<(), &'a str>;
 
     /// Merges a proto Bloom filter into a bloom filter.  In the default implementation, if the
     /// merge will probably produce a sparse filter the sparse
@@ -69,7 +69,7 @@ pub trait BloomFilter {
     }
 
     /// Merges a proto Bloom filter into this bloom filter.
-    fn merge_proto_inplace(&mut self, proto: &dyn Proto) -> Result<(), &str> {
+    fn merge_proto_inplace<'a>(&mut self, proto: &dyn Proto) -> Result<(), &'a str> {
         let other =BloomFilterFactory::materialize( self.shape(), proto );
         return self.merge_inplace(&other);
     }
@@ -255,7 +255,7 @@ impl Simple {
 }
 
 impl BloomFilter for Simple {
-    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<(), &str> {
+    fn merge_inplace<'a>(&mut self, other: &BloomFilterType) -> Result<(), &'a str> {
         let mut b = BitVector::new(self.shape.number_of_buckets());
         b.insert_all(&self.buffer);
         if other.is_sparse() {
@@ -329,7 +329,7 @@ impl Sparse {
 }
 
 impl BloomFilter for Sparse {
-    fn merge_inplace(&mut self, other: &BloomFilterType) -> Result<(), &str> {
+    fn merge_inplace<'a>(&mut self, other: &BloomFilterType) -> Result<(), &'a str> {
         let mut v: Vec<usize> = Vec::new();
         self.buffer.iter().for_each(|s| v.push(*s));
         if other.is_sparse() {
