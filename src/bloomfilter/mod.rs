@@ -12,7 +12,7 @@ use crate::bloomfilter::hasher::HasherType;
 use crate::bloomfilter::index_producer::{IndexProducer, IndexProducerType};
 
 
-type BloomFilterType = Box<dyn BloomFilter>;
+pub type BloomFilterType = Box<dyn BloomFilter>;
 
 /// The interface between the internal and external representations of the contents of a Bloom filter.
 /// All bloom filters must be able to produce an iterator on bit buckets that map to a bit wise
@@ -85,9 +85,9 @@ pub trait BloomFilter: BitMapProducer + IndexProducer {
 #[derive(Copy, Clone, Debug)]
 pub struct Shape {
     /// number of bits in the filter
-    m: usize,
+    pub m: usize,
     /// number of functions
-    k: usize,
+    pub k: usize,
 }
 
 impl Shape {
