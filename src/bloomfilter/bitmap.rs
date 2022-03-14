@@ -14,7 +14,7 @@ impl BitMap {
     /// the proper bit will be enabled all other bits will be zero.
     pub fn get_long_bit(bit_index: &i32) -> u64 {
         let result :u64 = 1;
-        result << bit_index
+        result << (bit_index % 64)
     }
 
     /// returns the index of the bitmap that contains the specified bit
